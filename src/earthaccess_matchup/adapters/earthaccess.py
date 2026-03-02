@@ -24,13 +24,15 @@ Usage
 Responsibilities
 ----------------
 * Accept a single ``earthaccess``-opened file-like object.
-* Detect whether the underlying file is grouped or flat NetCDF.
-* Open it with ``xarray.open_dataset`` (engine auto-detected).
-* Close the dataset immediately after extraction to avoid file-handle
-  leaks (the engine controls this via a context-manager protocol).
+* Open it with ``xarray.open_dataset`` using ``engine="h5netcdf"`` by
+  default.
+* Return the ``xarray.Dataset`` to the caller; the caller is responsible
+  for closing it.
 """
 
 from __future__ import annotations
+
+import xarray as xr
 
 from earthaccess_matchup.adapters.base import SourceAdapter
 
@@ -47,17 +49,19 @@ class EarthAccessAdapter(SourceAdapter):
     def __init__(self, source: object) -> None:
         self._source = source
 
-    def open_dataset(self, **kwargs: object) -> object:
+    def open_dataset(self, **kwargs: object) -> xr.Dataset:
         """Open the underlying source with ``xarray.open_dataset``.
 
         Parameters
         ----------
         **kwargs:
-            Forwarded to ``xarray.open_dataset``.
+            Forwarded to ``xarray.open_dataset``.  Defaults to
+            ``engine="h5netcdf"`` when no ``engine`` key is provided.
 
         Returns
         -------
         xarray.Dataset
         """
-        # TODO: implement — call xarray.open_dataset(self._source, **kwargs)
-        raise NotImplementedError
+        if "engine" not in kwargs:
+            kwargs["engine"] = "h5netcdf"
+        return xr.open_dataset(self._source, **kwargs)  # type: ignore[arg-type]

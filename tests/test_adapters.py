@@ -49,7 +49,11 @@ class TestEarthAccessAdapter:
     def test_is_subclass_of_source_adapter(self) -> None:
         assert issubclass(EarthAccessAdapter, SourceAdapter)
 
-    def test_open_dataset_raises_not_implemented(self) -> None:
-        adapter = EarthAccessAdapter(source=object())
-        with pytest.raises(NotImplementedError):
-            adapter.open_dataset()
+    def test_open_dataset_returns_dataset(self, daily_nc_file: str) -> None:
+        """open_dataset should return a real xr.Dataset when given a valid path."""
+        import xarray as xr
+
+        adapter = EarthAccessAdapter(source=daily_nc_file)
+        ds = adapter.open_dataset(engine="netcdf4")
+        assert isinstance(ds, xr.Dataset)
+        ds.close()
