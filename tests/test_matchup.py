@@ -9,8 +9,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from earthaccess_matchup.core._granule import get_source_id, parse_temporal_range
-from earthaccess_matchup.core.engine import matchup
+from point_collocation.core._granule import get_source_id, parse_temporal_range
+from point_collocation.core.engine import matchup
 
 # ---------------------------------------------------------------------------
 # Tests for get_source_id
@@ -119,7 +119,7 @@ class TestMatchupWithRealFiles:
     def _with_sources(self, sources: list) -> None:
         """Patch _resolve_earthaccess_sources to return *sources*."""
         self._monkeypatch.setattr(
-            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            "point_collocation.core.engine._resolve_earthaccess_sources",
             lambda *args, **kwargs: sources,
         )
 
@@ -366,7 +366,7 @@ class TestMultiDimVariableExtraction:
     ) -> None:
         """Rrs(lat,lon,wavelength) must produce Rrs_412, Rrs_443, Rrs_490."""
         monkeypatch.setattr(
-            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            "point_collocation.core.engine._resolve_earthaccess_sources",
             lambda *args, **kwargs: [pace_rrs_nc_file],
         )
         points = pd.DataFrame(
@@ -393,7 +393,7 @@ class TestMultiDimVariableExtraction:
     ) -> None:
         """Extracted Rrs values must match a direct xarray nearest-neighbour lookup."""
         monkeypatch.setattr(
-            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            "point_collocation.core.engine._resolve_earthaccess_sources",
             lambda *args, **kwargs: [pace_rrs_nc_file],
         )
         points = pd.DataFrame(
@@ -433,7 +433,7 @@ class TestMultiDimVariableExtraction:
         combined.to_netcdf(combined_path, engine="netcdf4")
 
         monkeypatch.setattr(
-            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            "point_collocation.core.engine._resolve_earthaccess_sources",
             lambda *args, **kwargs: [combined_path],
         )
         points = pd.DataFrame(
@@ -464,7 +464,7 @@ class TestEarthAccessAdapterIntegration:
     def test_adapter_open_dataset_returns_dataset(
         self, daily_nc_file: str
     ) -> None:
-        from earthaccess_matchup.adapters.earthaccess import EarthAccessAdapter
+        from point_collocation.adapters.earthaccess import EarthAccessAdapter
 
         adapter = EarthAccessAdapter(source=daily_nc_file)
         ds = adapter.open_dataset(engine="netcdf4")
@@ -476,13 +476,13 @@ class TestEarthAccessAdapterIntegration:
         self, daily_nc_file: str, points_on_day1: pd.DataFrame,
         monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from earthaccess_matchup.adapters.earthaccess import EarthAccessAdapter
+        from point_collocation.adapters.earthaccess import EarthAccessAdapter
 
         adapter = EarthAccessAdapter(source=daily_nc_file)
         # Manually give the adapter an identifiable path attribute
         adapter._source = daily_nc_file  # path string → get_source_id works
         monkeypatch.setattr(
-            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            "point_collocation.core.engine._resolve_earthaccess_sources",
             lambda *args, **kwargs: [adapter],
         )
         result = matchup(
@@ -502,7 +502,7 @@ class TestDateColumnNormalisation:
     @pytest.fixture(autouse=True)
     def _patch_resolve(self, monkeypatch: pytest.MonkeyPatch, daily_nc_file: str) -> None:
         monkeypatch.setattr(
-            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            "point_collocation.core.engine._resolve_earthaccess_sources",
             lambda *args, **kwargs: [daily_nc_file],
         )
 

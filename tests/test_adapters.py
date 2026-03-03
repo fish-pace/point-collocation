@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from earthaccess_matchup.adapters.base import SourceAdapter
-from earthaccess_matchup.adapters.earthaccess import EarthAccessAdapter
-from earthaccess_matchup.core.types import SourceProtocol
+from point_collocation.adapters.base import SourceAdapter
+from point_collocation.adapters.earthaccess import EarthAccessAdapter
+from point_collocation.core.types import SourceProtocol
 
 # ---------------------------------------------------------------------------
 # SourceAdapter (abstract base)

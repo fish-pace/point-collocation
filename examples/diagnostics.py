@@ -1,7 +1,7 @@
 """Example 3 — diagnostics and error handling.
 
 Demonstrates the ``return_diagnostics=True`` mode, which returns a
-:class:`~earthaccess_matchup.diagnostics.report.MatchupReport` alongside
+:class:`~point_collocation.diagnostics.report.MatchupReport` alongside
 the result DataFrame.  The report records timing, variables
 found/missing, per-point warnings, and file-open errors.
 
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import earthaccess
 import pandas as pd
 
-import earthaccess_matchup as eam
+import point_collocation as pc
 
 earthaccess.login()
 
@@ -52,7 +52,7 @@ print()
 #    Request 'Rrs' (present in PACE OCI RRS) and 'nonexistent_var' (absent)
 #    to show the variables_found / variables_missing tracking.
 # ---------------------------------------------------------------------------
-result, report = eam.matchup(
+result, report = pc.matchup(
     df_points,
     data_source="earthaccess",
     source_kwargs={

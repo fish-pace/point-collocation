@@ -7,7 +7,7 @@ source dataset.
 Slot in the extension pipeline
 --------------------------------
 Pass a ``QAFilter`` instance as the ``post_extract`` argument to
-:func:`earthaccess_matchup.matchup` once the hook API is implemented.
+:func:`point_collocation.matchup` once the hook API is implemented.
 
 Not yet implemented.
 """

@@ -7,7 +7,7 @@ nearest *N* pixels).
 Slot in the extension pipeline
 --------------------------------
 Pass a ``SpatialAverager`` instance as the ``pre_extract`` argument to
-:func:`earthaccess_matchup.matchup` once the hook API is implemented.
+:func:`point_collocation.matchup` once the hook API is implemented.
 
 Not yet implemented.
 """

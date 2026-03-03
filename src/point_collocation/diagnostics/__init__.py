@@ -9,9 +9,9 @@ Diagnostics are first-class.  Every matchup run produces a
 * any per-granule warnings or errors
 
 The report is returned alongside the results DataFrame when
-``return_diagnostics=True`` is passed to :func:`earthaccess_matchup.matchup`.
+``return_diagnostics=True`` is passed to :func:`point_collocation.matchup`.
 """
 
-from earthaccess_matchup.diagnostics.report import MatchupReport
+from point_collocation.diagnostics.report import MatchupReport
 
 __all__ = ["MatchupReport"]

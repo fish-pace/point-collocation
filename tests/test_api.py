@@ -1,4 +1,4 @@
-"""Tests for the public API surface of earthaccess_matchup."""
+"""Tests for the public API surface of point_collocation."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import inspect
 import pandas as pd
 import pytest
 
-import earthaccess_matchup as eam
-from earthaccess_matchup.core.engine import matchup
-from earthaccess_matchup.core.types import SourceProtocol
-from earthaccess_matchup.diagnostics.report import GranuleSummary, MatchupReport
+import point_collocation as pc
+from point_collocation.core.engine import matchup
+from point_collocation.core.types import SourceProtocol
+from point_collocation.diagnostics.report import GranuleSummary, MatchupReport
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,13 +40,13 @@ class _StubSource:
 
 class TestPublicAPI:
     def test_matchup_importable_from_top_level(self) -> None:
-        assert callable(eam.matchup)
+        assert callable(pc.matchup)
 
     def test_matchup_is_same_object_as_engine(self) -> None:
-        assert eam.matchup is matchup
+        assert pc.matchup is matchup
 
     def test_all_contains_matchup(self) -> None:
-        assert "matchup" in eam.__all__
+        assert "matchup" in pc.__all__
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ class TestMatchupBehaviour:
     def _patch_resolve(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Patch _resolve_earthaccess_sources to return an empty list."""
         monkeypatch.setattr(
-            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            "point_collocation.core.engine._resolve_earthaccess_sources",
             lambda *args, **kwargs: [],
         )
 

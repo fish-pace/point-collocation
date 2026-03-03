@@ -5,19 +5,19 @@ Responsibilities
 * Accept a validated points ``DataFrame`` and an iterable of sources.
   Sources may be file-like objects (e.g., from ``earthaccess.open()``)
   or objects satisfying
-  :class:`~earthaccess_matchup.core.types.SourceProtocol`.
+  :class:`~point_collocation.core.types.SourceProtocol`.
 * Open each source individually with ``xarray.open_dataset`` (never
   ``open_mfdataset``) to minimise cloud I/O and avoid memory leaks.
 * Extract the requested variables at each point's location/time using
   nearest-neighbour selection.
 * Collect results into a ``pandas.DataFrame`` with the original columns
   plus one new column per extracted variable.
-* Populate a :class:`~earthaccess_matchup.diagnostics.report.MatchupReport`
+* Populate a :class:`~point_collocation.diagnostics.report.MatchupReport`
   throughout the run.
 
 The engine does **not** know about earthaccess, STAC, or any other
 cloud-data provider.  All provider-specific logic lives in
-``earthaccess_matchup.adapters``.
+``point_collocation.adapters``.
 
 Future extension points
 -----------------------
@@ -34,9 +34,9 @@ from typing import Literal
 import pandas as pd
 import xarray as xr
 
-from earthaccess_matchup.core._granule import get_source_id, parse_temporal_range
-from earthaccess_matchup.core.types import PointsFrame
-from earthaccess_matchup.diagnostics.report import GranuleSummary, MatchupReport
+from point_collocation.core._granule import get_source_id, parse_temporal_range
+from point_collocation.core.types import PointsFrame
+from point_collocation.diagnostics.report import GranuleSummary, MatchupReport
 
 # Candidate coordinate names tried in order when locating lat/lon dims.
 _LAT_NAMES = ("lat", "latitude", "Latitude", "LAT")

@@ -1,7 +1,7 @@
 """earthaccess adapter.
 
 Wraps the file-like objects returned by ``earthaccess.open()`` so they
-satisfy :class:`~earthaccess_matchup.core.types.SourceProtocol` and can
+satisfy :class:`~point_collocation.core.types.SourceProtocol` and can
 be consumed by the core engine without modification.
 
 Usage
@@ -9,9 +9,9 @@ Usage
 ::
 
     import earthaccess
-    import earthaccess_matchup as eam
+    import point_collocation as pc
 
-    out = eam.matchup(
+    out = pc.matchup(
         df_points,
         data_source="earthaccess",
         source_kwargs={
@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import xarray as xr
 
-from earthaccess_matchup.adapters.base import SourceAdapter
+from point_collocation.adapters.base import SourceAdapter
 
 
 class EarthAccessAdapter(SourceAdapter):

@@ -1,4 +1,4 @@
-"""earthaccess_matchup examples package.
+"""point_collocation examples package.
 
 Run all three examples in sequence::
 

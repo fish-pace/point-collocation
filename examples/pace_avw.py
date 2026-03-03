@@ -21,7 +21,7 @@ What it shows
 
 from pathlib import Path
 import earthaccess
-import earthaccess_matchup as eam
+import point_collocation as pc
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
@@ -30,7 +30,7 @@ POINTS_CSV = HERE / "fixtures" / "points.csv"
 earthaccess.login()
 df_points = pd.read_csv(POINTS_CSV)  # lat, lon, date columns
 
-result = eam.matchup(
+result = pc.matchup(
     df_points[0:1],
     data_source="earthaccess",
     source_kwargs={
@@ -56,7 +56,7 @@ df = pd.DataFrame(
 )
 df["time"] = pd.to_datetime(df["time"])
 
-result = eam.matchup(
+result = pc.matchup(
     df,
     data_source="earthaccess",
     source_kwargs={

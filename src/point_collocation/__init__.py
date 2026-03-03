@@ -1,4 +1,4 @@
-"""earthaccess_matchup — point-based matchups against cloud-hosted granules.
+"""point_collocation — point-based matchups against cloud-hosted granules.
 
 Public API
 ----------
@@ -10,7 +10,7 @@ Quick start
 ::
 
     import earthaccess
-    import earthaccess_matchup as eam
+    import point_collocation as pc
     import pandas as pd
 
     earthaccess.login()
@@ -21,7 +21,7 @@ Quick start
         "time": pd.to_datetime(["2023-06-01", "2023-06-02"]),
     })
 
-    out = eam.matchup(
+    out = pc.matchup(
         df_points,
         data_source="earthaccess",
         source_kwargs={
@@ -33,14 +33,14 @@ Quick start
 
 Optional xarray accessor
 -------------------------
-Register the ``Dataset.eam`` accessor for interactive use::
+Register the ``Dataset.pc`` accessor for interactive use::
 
-    import earthaccess_matchup.extensions.accessor  # noqa: F401
+    import point_collocation.extensions.accessor  # noqa: F401
 
     ds = xr.open_dataset(...)
-    out = ds.eam.extract_points(df_points, variables=["sst"])
+    out = ds.pc.extract_points(df_points, variables=["sst"])
 """
 
-from earthaccess_matchup.core.engine import matchup
+from point_collocation.core.engine import matchup
 
 __all__ = ["matchup"]

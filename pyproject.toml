@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "earthaccess-matchup"
+name = "point-collocation"
 version = "0.1.0"
 description = "Point-based lat/lon/time matchups against cloud-hosted NetCDF/Zarr granules"
 readme = "README.md"
@@ -24,14 +24,14 @@ dev = [
     "mypy",
 ]
 all = [
-    "earthaccess-matchup[earthaccess,dev]",
+    "point-collocation[earthaccess,dev]",
 ]
 
 [project.urls]
 Repository = "https://github.com/fish-pace/earthaccess_matchup"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/earthaccess_matchup"]
+packages = ["src/point_collocation"]
 
 [tool.ruff]
 src = ["src"]

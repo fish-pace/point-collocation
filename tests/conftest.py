@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for earthaccess_matchup tests."""
+"""Shared pytest fixtures for point_collocation tests."""
 
 from __future__ import annotations
 

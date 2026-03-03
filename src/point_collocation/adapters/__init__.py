@@ -11,6 +11,6 @@ url          : plain HTTPS URLs
 local        : local file paths
 """
 
-from earthaccess_matchup.adapters.base import SourceAdapter
+from point_collocation.adapters.base import SourceAdapter
 
 __all__ = ["SourceAdapter"]

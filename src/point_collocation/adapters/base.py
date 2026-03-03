@@ -2,7 +2,7 @@
 
 A source adapter wraps a heterogeneous input — a file-like object,
 a URL, a STAC asset — and exposes the uniform
-:class:`~earthaccess_matchup.core.types.SourceProtocol` interface that
+:class:`~point_collocation.core.types.SourceProtocol` interface that
 the core engine consumes.
 
 Subclasses must implement :meth:`open_dataset`.

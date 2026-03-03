@@ -1,4 +1,4 @@
-"""Optional xarray accessor — ``xarray.Dataset.eam``.
+"""Optional xarray accessor — ``xarray.Dataset.pc``.
 
 Why include an accessor?
 ------------------------
@@ -11,10 +11,10 @@ Registration
 The accessor is **not** registered automatically on import of the
 top-level package.  Users must opt in::
 
-    import earthaccess_matchup.extensions.accessor  # registers .eam
+    import point_collocation.extensions.accessor  # registers .pc
 
     ds = xr.open_dataset(...)
-    matched = ds.eam.extract_points(df_points, variables=["sst"])
+    matched = ds.pc.extract_points(df_points, variables=["sst"])
 
 The accessor depends only on ``xarray`` and ``pandas``, both of which
 are core dependencies, so no additional optional install is required.
@@ -27,9 +27,9 @@ from __future__ import annotations
 import xarray as xr
 
 
-@xr.register_dataset_accessor("eam")
-class EarthAccessMatchupAccessor:
-    """``xarray.Dataset.eam`` accessor for interactive point extraction.
+@xr.register_dataset_accessor("pc")
+class PointCollocationAccessor:
+    """``xarray.Dataset.pc`` accessor for interactive point extraction.
 
     Attach to any open ``xarray.Dataset`` to extract matchup values
     without assembling a full source list.
@@ -54,12 +54,12 @@ class EarthAccessMatchupAccessor:
         variables:
             Dataset variable names to extract.
         nc_type:
-            ``"grouped"`` or ``"flat"`` (see :func:`earthaccess_matchup.matchup`).
+            ``"grouped"`` or ``"flat"`` (see :func:`point_collocation.matchup`).
 
         Returns
         -------
         pandas.DataFrame
-            Same contract as :func:`earthaccess_matchup.matchup`.
+            Same contract as :func:`point_collocation.matchup`.
 
         Not yet implemented.
         """
