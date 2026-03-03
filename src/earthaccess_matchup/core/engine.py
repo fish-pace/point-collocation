@@ -142,6 +142,8 @@ def matchup(
     for var in variables:
         result[var] = float("nan")
 
+    vars_expanded: set[str] = set()
+
     for source in sources:
         t0 = time.monotonic()
         source_id = get_source_id(source)
@@ -169,7 +171,7 @@ def matchup(
             if hasattr(source, "open_dataset"):
                 ds = source.open_dataset(**open_dataset_kwargs)
                 try:
-                    vars_found, vars_missing, warns = _extract_into(
+                    vars_found, vars_missing, warns, newly_expanded = _extract_into(
                         result, ds, pts_subset, variables
                     )
                 finally:
@@ -180,9 +182,10 @@ def matchup(
                 if "engine" not in kwargs:
                     kwargs["engine"] = "h5netcdf"
                 with xr.open_dataset(source, **kwargs) as ds:
-                    vars_found, vars_missing, warns = _extract_into(
+                    vars_found, vars_missing, warns, newly_expanded = _extract_into(
                         result, ds, pts_subset, variables
                     )
+            vars_expanded.update(newly_expanded)
             gs = GranuleSummary(
                 granule_id=source_id,
                 elapsed_seconds=time.monotonic() - t0,
@@ -198,6 +201,12 @@ def matchup(
             )
 
         report._add_granule(gs)
+
+    # Drop the pre-initialized NaN placeholder column for any variable that was
+    # expanded into per-coordinate columns (e.g. Rrs → Rrs_412, Rrs_443, …).
+    for var in vars_expanded:
+        if var in result.columns:
+            result = result.drop(columns=[var])
 
     if return_diagnostics:
         return result, report
@@ -313,7 +322,7 @@ def _extract_into(
     ds: xr.Dataset,
     pts_subset: pd.DataFrame,
     variables: list[str],
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
     """Extract *variables* from *ds* at each row of *pts_subset*.
 
     Values are written directly into *result* (in-place) using the
@@ -327,6 +336,10 @@ def _extract_into(
         Variables requested but absent from the dataset.
     warnings:
         Non-fatal per-point extraction failures.
+    vars_expanded:
+        Variables whose selection produced extra dimensions and were
+        therefore expanded into per-coordinate columns (e.g. ``Rrs``
+        → ``Rrs_412``, ``Rrs_443``, …).
     """
     lat_name = _find_coord(ds, _LAT_NAMES)
     lon_name = _find_coord(ds, _LON_NAMES)
@@ -334,6 +347,7 @@ def _extract_into(
     vars_found: list[str] = []
     vars_missing: list[str] = []
     warnings: list[str] = []
+    vars_expanded: list[str] = []
 
     for var in variables:
         if var not in ds:
@@ -349,17 +363,28 @@ def _extract_into(
             continue
 
         da = ds[var]
+        _var_expanded = False
         for idx, row in pts_subset.iterrows():
             try:
-                val = da.sel(
+                selected = da.sel(
                     {lat_name: row["lat"], lon_name: row["lon"]},
                     method="nearest",
-                ).item()
-                result.loc[idx, var] = val
+                )
+                if selected.ndim == 0:
+                    result.loc[idx, var] = selected.item()
+                else:
+                    # Multi-dimensional result (e.g. wavelength axis): expand
+                    # into individual columns named {var}_{int(coord_value)}.
+                    _var_expanded = True
+                    for coord_val, val in selected.to_series().items():
+                        col_name = f"{var}_{int(coord_val)}"
+                        result.loc[idx, col_name] = val
             except Exception as exc:
                 warnings.append(
                     f"Could not extract {var!r} at index {idx} "
                     f"(lat={row['lat']}, lon={row['lon']}): {exc}"
                 )
+        if _var_expanded:
+            vars_expanded.append(var)
 
-    return vars_found, vars_missing, warnings
+    return vars_found, vars_missing, warnings, vars_expanded

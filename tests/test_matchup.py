@@ -311,6 +311,115 @@ class TestMatchupWithRealFiles:
 
 
 # ---------------------------------------------------------------------------
+# Multi-dimensional variable extraction (e.g. PACE Rrs with wavelength axis)
+# ---------------------------------------------------------------------------
+
+class TestMultiDimVariableExtraction:
+    """matchup() must expand variables with extra dims into per-coord columns."""
+
+    @pytest.fixture()
+    def pace_rrs_nc_file(self, tmp_path: pathlib.Path) -> str:
+        """Synthetic PACE-style file with Rrs(lat, lon, wavelength)."""
+        import numpy as np
+
+        lats = np.arange(-90.0, 91.0, 1.0)
+        lons = np.arange(-180.0, 181.0, 1.0)
+        wavelengths = np.array([412, 443, 490], dtype=np.float32)
+        rng = np.random.default_rng(42)
+        rrs = rng.uniform(
+            0.0, 0.05, (lats.size, lons.size, wavelengths.size)
+        ).astype(np.float32)
+        ds = xr.Dataset(
+            {"Rrs": (["lat", "lon", "wavelength"], rrs)},
+            coords={"lat": lats, "lon": lons, "wavelength": wavelengths},
+        )
+        path = tmp_path / "PACE_OCI_2023152.L3m.DAY.RRS.Rrs.4km.nc"
+        ds.to_netcdf(path, engine="netcdf4")
+        return str(path)
+
+    def test_multidim_var_expands_to_per_wavelength_columns(
+        self, pace_rrs_nc_file: str
+    ) -> None:
+        """Rrs(lat,lon,wavelength) must produce Rrs_412, Rrs_443, Rrs_490."""
+        points = pd.DataFrame(
+            {
+                "lat": [34.0, -10.0],
+                "lon": [-120.0, 50.0],
+                "time": pd.to_datetime(["2023-06-01", "2023-06-01"]),
+            }
+        )
+        result = matchup(
+            points,
+            sources=[pace_rrs_nc_file],
+            variables=["Rrs"],
+            engine="netcdf4",
+        )
+        assert "Rrs_412" in result.columns
+        assert "Rrs_443" in result.columns
+        assert "Rrs_490" in result.columns
+        # The bare 'Rrs' placeholder column must be dropped.
+        assert "Rrs" not in result.columns
+
+    def test_multidim_var_values_match_dataset(
+        self, pace_rrs_nc_file: str
+    ) -> None:
+        """Extracted Rrs values must match a direct xarray nearest-neighbour lookup."""
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "time": pd.to_datetime(["2023-06-01"]),
+            }
+        )
+        result = matchup(
+            points,
+            sources=[pace_rrs_nc_file],
+            variables=["Rrs"],
+            engine="netcdf4",
+        )
+        with xr.open_dataset(pace_rrs_nc_file) as ds:
+            selected = ds["Rrs"].sel(lat=34.0, lon=-120.0, method="nearest")
+            for wl in [412, 443, 490]:
+                expected = float(selected.sel(wavelength=wl))
+                assert math.isclose(result.loc[0, f"Rrs_{wl}"], expected, rel_tol=1e-5)
+
+    def test_multidim_and_scalar_vars_coexist(
+        self, pace_rrs_nc_file: str, daily_nc_file: str, tmp_path: pathlib.Path
+    ) -> None:
+        """Requesting both a scalar and multi-dim variable at once must work."""
+        # Build a combined dataset (scalar sst + multi-dim Rrs) in one file.
+        with (
+            xr.open_dataset(daily_nc_file) as sst_ds,
+            xr.open_dataset(pace_rrs_nc_file) as rrs_ds,
+        ):
+            combined = xr.merge([sst_ds, rrs_ds])
+
+        combined_path = str(
+            tmp_path / "AQUA_MODIS.20230601.L3m.DAY.combined.nc"
+        )
+        combined.to_netcdf(combined_path, engine="netcdf4")
+
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "time": pd.to_datetime(["2023-06-01"]),
+            }
+        )
+        result = matchup(
+            points,
+            sources=[combined_path],
+            variables=["sst", "Rrs"],
+            engine="netcdf4",
+        )
+
+        assert "sst" in result.columns
+        assert not math.isnan(result.loc[0, "sst"])
+        assert "Rrs_412" in result.columns
+        assert "Rrs" not in result.columns
+
+
+# ---------------------------------------------------------------------------
 # EarthAccessAdapter integration
 # ---------------------------------------------------------------------------
 
