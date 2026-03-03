@@ -1,23 +1,21 @@
-"""Example 2 — multi-file temporal routing.
+"""Example 2 — multi-date matchup via earthaccess.
 
 Demonstrates that the matchup engine automatically routes each
 observation point to the granule whose temporal coverage contains
-that point's date, opening only the necessary files.
+that point's date when using ``data_source='earthaccess'``.
 
 Run::
 
-    python -m examples.multi_file
-    # or
     python examples/multi_file.py
 
 What it shows
 -------------
-* Points spread across three different time periods (daily, 8-day,
-  monthly).
-* Three source granules, one for each period.
-* The engine skips granules that have no overlapping points, meaning
-  only one file is opened per point — even when the source list is long.
-* How to mix granule types (daily, 8-day, monthly) in a single call.
+* Points spread across multiple dates in a single ``eam.matchup()`` call.
+* The engine queries earthaccess once per unique date, so only the
+  granules needed for the requested points are opened.
+* Using ``return_diagnostics=True`` to inspect timing and per-granule
+  results.
+* Requires earthdata authentication (``earthaccess.login()``).
 """
 
 from __future__ import annotations
@@ -27,13 +25,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import earthaccess
 import pandas as pd
 
 import earthaccess_matchup as eam
-from examples._fixtures import make_8day, make_daily, make_monthly
+
+earthaccess.login()
 
 # ---------------------------------------------------------------------------
-# 1. Build a points table that spans multiple time periods.
+# 1. Build a points table that spans multiple dates.
 # ---------------------------------------------------------------------------
 df_points = pd.DataFrame(
     {
@@ -41,14 +41,14 @@ df_points = pd.DataFrame(
         "lon": [10.0, 10.0, 10.0, 120.0, 120.0],
         "time": pd.to_datetime(
             [
-                "2023-06-01",  # daily granule
-                "2023-06-04",  # 8-day composite (2023-06-01 → 2023-06-08)
-                "2023-06-15",  # monthly composite (June 2023)
-                "2023-06-01",  # daily granule (different location)
-                "2023-06-20",  # monthly composite (different location)
+                "2025-04-09",
+                "2025-04-10",
+                "2025-04-11",
+                "2025-04-09",
+                "2025-04-11",
             ]
         ),
-        "label": ["daily", "8day", "monthly", "daily-B", "monthly-B"],
+        "label": ["day1", "day2", "day3", "day1-B", "day3-B"],
     }
 )
 
@@ -57,35 +57,26 @@ print(df_points.to_string(index=False))
 print()
 
 # ---------------------------------------------------------------------------
-# 2. Prepare source files (three granule types for June 2023).
-# ---------------------------------------------------------------------------
-sources = [
-    make_daily("20230601", seed=10),
-    make_8day("20230601", "20230608", seed=20),
-    make_monthly(2023, 6, seed=30),
-]
-
-print("Source files:")
-for s in sources:
-    print(f"  {Path(s).name}")
-print()
-
-# ---------------------------------------------------------------------------
-# 3. Run matchup.
+# 2. Run matchup with diagnostics enabled.
+#    source_kwargs are forwarded directly to earthaccess.search_data().
 # ---------------------------------------------------------------------------
 result, report = eam.matchup(
     df_points,
-    sources,
-    variables=["sst", "chlor_a"],
-    engine="netcdf4",
+    data_source="earthaccess",
+    source_kwargs={
+        "short_name": "PACE_OCI_L3M_RRS",
+        "granule_name": "*.DAY.*.4km.*",
+    },
+    variables=["Rrs"],
     return_diagnostics=True,
 )
 
 # ---------------------------------------------------------------------------
-# 4. Inspect results and diagnostics.
+# 3. Inspect results and diagnostics.
 # ---------------------------------------------------------------------------
-print("Matchup result:")
-print(result.to_string(index=False))
+print("Matchup result (first few Rrs columns):")
+rrs_cols = [c for c in result.columns if c.startswith("Rrs_")][:5]
+print(result[["lat", "lon", "time", "label"] + rrs_cols].to_string(index=False))
 print()
 print("Diagnostics summary:")
 print(f"  {report.summary()}")
