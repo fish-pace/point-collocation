@@ -1,0 +1,117 @@
+[
+  {
+    "cloud_hosted": true,
+    "uuid": "a7cb5553-a45d-4f5c-832a-dcd1bbd9c9c6",
+    "render_dict": {
+      "meta": {
+        "concept-type": "granule",
+        "concept-id": "G3748170398-OB_CLOUD",
+        "revision-id": 2,
+        "native-id": "PACE_OCI_L3M_RRS_PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc_3.1",
+        "collection-concept-id": "C3620140444-OB_CLOUD",
+        "provider-id": "OB_CLOUD",
+        "format": "application/vnd.nasa.cmr.umm+json",
+        "revision-date": "2025-09-21T13:36:41.134Z"
+      },
+      "umm": {
+        "TemporalExtent": {
+          "RangeDateTime": {
+            "EndingDateTime": "2025-04-09T23:59:59Z",
+            "BeginningDateTime": "2025-04-09T00:00:00Z"
+          }
+        },
+        "GranuleUR": "PACE_OCI_L3M_RRS_PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc_3.1",
+        "SpatialExtent": {
+          "HorizontalSpatialDomain": {
+            "Geometry": {
+              "BoundingRectangles": [
+                {
+                  "SouthBoundingCoordinate": -90,
+                  "EastBoundingCoordinate": 180,
+                  "NorthBoundingCoordinate": 90,
+                  "WestBoundingCoordinate": -180
+                }
+              ]
+            }
+          }
+        },
+        "ProviderDates": [
+          {
+            "Date": "2025-09-21T08:01:00Z",
+            "Type": "Insert"
+          },
+          {
+            "Type": "Update",
+            "Date": "2025-09-21T07:11:08.186Z"
+          }
+        ],
+        "CollectionReference": {
+          "ShortName": "PACE_OCI_L3M_RRS",
+          "Version": "3.1"
+        },
+        "RelatedUrls": [
+          {
+            "URL": "https://oceandata.sci.gsfc.nasa.gov/opendap/PACE_OCI/L3SMI/2025/0409/PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc",
+            "Type": "USE SERVICE API",
+            "Subtype": "OPENDAP DATA"
+          },
+          {
+            "MimeType": "image/png",
+            "Type": "GET RELATED VISUALIZATION",
+            "URL": "https://oceandata.sci.gsfc.nasa.gov/browse_images/PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc.png?file_path=PACE_OCI/IMAGES/EDBRS/2025/0409",
+            "Format": "PNG"
+          },
+          {
+            "URL": "https://obdaac-tea.earthdatacloud.nasa.gov/ob-cumulus-prod-public/PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc",
+            "Description": "Download PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc",
+            "Type": "GET DATA"
+          },
+          {
+            "URL": "s3://ob-cumulus-prod-public/PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc",
+            "Description": "This link provides direct download access via S3 to the granule",
+            "Type": "GET DATA VIA DIRECT ACCESS"
+          },
+          {
+            "URL": "https://obdaac-tea.earthdatacloud.nasa.gov/s3credentials",
+            "Description": "api endpoint to retrieve temporary credentials valid for same-region direct s3 access",
+            "Type": "VIEW RELATED INFORMATION"
+          }
+        ],
+        "DataGranule": {
+          "ProductionDateTime": "2025-09-21T07:11:08.186Z",
+          "DayNightFlag": "Day",
+          "Identifiers": [
+            {
+              "IdentifierType": "ProducerGranuleId",
+              "Identifier": "PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc"
+            }
+          ],
+          "ArchiveAndDistributionInformation": [
+            {
+              "Format": "netCDF-4",
+              "Name": "PACE_OCI.20250409.L3m.DAY.RRS.V3_1.Rrs.4km.nc",
+              "MimeType": "application/x-netcdf",
+              "SizeInBytes": 771334993
+            }
+          ]
+        },
+        "Platforms": [
+          {
+            "Instruments": [
+              {
+                "ShortName": "OCI"
+              }
+            ],
+            "ShortName": "PACE"
+          }
+        ],
+        "MetadataSpecification": {
+          "URL": "https://cdn.earthdata.nasa.gov/umm/granule/v1.6.6",
+          "Name": "UMM-G",
+          "Version": "1.6.6"
+        }
+      },
+      "size": 735.6023721694946
+    }
+  }
+]

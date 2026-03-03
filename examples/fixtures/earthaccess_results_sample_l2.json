@@ -1,0 +1,395 @@
+[
+  {
+    "cloud_hosted": true,
+    "uuid": "a671d056-97df-4e0f-9e7c-fa619cd89198",
+    "render_dict": {
+      "meta": {
+        "concept-type": "granule",
+        "concept-id": "G3745558662-OB_CLOUD",
+        "revision-id": 1,
+        "native-id": "PACE_OCI_L2_AOP_PACE_OCI.20250305T160933.L2.OC_AOP.V3_1.nc_3.1",
+        "collection-concept-id": "C3620139598-OB_CLOUD",
+        "provider-id": "OB_CLOUD",
+        "format": "application/vnd.nasa.cmr.umm+json",
+        "revision-date": "2025-09-20T17:09:38.382Z"
+      },
+      "umm": {
+        "TemporalExtent": {
+          "RangeDateTime": {
+            "BeginningDateTime": "2025-03-05T16:09:33Z",
+            "EndingDateTime": "2025-03-05T16:14:32Z"
+          }
+        },
+        "GranuleUR": "PACE_OCI_L2_AOP_PACE_OCI.20250305T160933.L2.OC_AOP.V3_1.nc_3.1",
+        "SpatialExtent": {
+          "HorizontalSpatialDomain": {
+            "Geometry": {
+              "GPolygons": [
+                {
+                  "Boundary": {
+                    "Points": [
+                      {
+                        "Latitude": 55.74064,
+                        "Longitude": -38.97618
+                      },
+                      {
+                        "Latitude": 49.1077,
+                        "Longitude": -78.13296
+                      },
+                      {
+                        "Latitude": 32.4261,
+                        "Longitude": -67.51633
+                      },
+                      {
+                        "Latitude": 37.98933,
+                        "Longitude": -38.4675
+                      },
+                      {
+                        "Latitude": 55.74064,
+                        "Longitude": -38.97618
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "ProviderDates": [
+          {
+            "Date": "2025-09-20T16:58:37Z",
+            "Type": "Insert"
+          },
+          {
+            "Type": "Update",
+            "Date": "2025-09-20T05:56:27.643Z"
+          }
+        ],
+        "CollectionReference": {
+          "Version": "3.1",
+          "ShortName": "PACE_OCI_L2_AOP"
+        },
+        "RelatedUrls": [
+          {
+            "URL": "https://oceandata.sci.gsfc.nasa.gov/browse_images/PACE_OCI.20250305T160933.L2.OC_AOP.V3_1.nc.png?file_path=PACE_OCI/IMAGES/EDBRS/2025/0305",
+            "MimeType": "image/png",
+            "Type": "GET RELATED VISUALIZATION",
+            "Format": "PNG"
+          },
+          {
+            "URL": "https://obdaac-tea.earthdatacloud.nasa.gov/ob-cumulus-prod-public/PACE_OCI.20250305T160933.L2.OC_AOP.V3_1.nc",
+            "Description": "Download PACE_OCI.20250305T160933.L2.OC_AOP.V3_1.nc",
+            "Type": "GET DATA"
+          },
+          {
+            "URL": "s3://ob-cumulus-prod-public/PACE_OCI.20250305T160933.L2.OC_AOP.V3_1.nc",
+            "Description": "This link provides direct download access via S3 to the granule",
+            "Type": "GET DATA VIA DIRECT ACCESS"
+          },
+          {
+            "URL": "https://obdaac-tea.earthdatacloud.nasa.gov/s3credentials",
+            "Description": "api endpoint to retrieve temporary credentials valid for same-region direct s3 access",
+            "Type": "VIEW RELATED INFORMATION"
+          }
+        ],
+        "CloudCover": 93.1,
+        "DataGranule": {
+          "Identifiers": [
+            {
+              "Identifier": "PACE_OCI.20250305T160933.L2.OC_AOP.V3_1.nc",
+              "IdentifierType": "ProducerGranuleId"
+            }
+          ],
+          "ArchiveAndDistributionInformation": [
+            {
+              "Format": "netCDF-4",
+              "MimeType": "application/x-netcdf",
+              "Name": "PACE_OCI.20250305T160933.L2.OC_AOP.V3_1.nc",
+              "SizeInBytes": 76229481
+            }
+          ],
+          "DayNightFlag": "Day",
+          "ProductionDateTime": "2025-09-20T05:56:27.643Z"
+        },
+        "Platforms": [
+          {
+            "Instruments": [
+              {
+                "ShortName": "OCI"
+              }
+            ],
+            "ShortName": "PACE"
+          }
+        ],
+        "MetadataSpecification": {
+          "URL": "https://cdn.earthdata.nasa.gov/umm/granule/v1.6.6",
+          "Name": "UMM-G",
+          "Version": "1.6.6"
+        }
+      },
+      "size": 72.69809818267822
+    }
+  },
+  {
+    "cloud_hosted": true,
+    "uuid": "b850bf7e-f681-4533-819b-ec84f0db951e",
+    "render_dict": {
+      "meta": {
+        "concept-type": "granule",
+        "concept-id": "G3745242057-OB_CLOUD",
+        "revision-id": 1,
+        "native-id": "PACE_OCI_L2_AOP_PACE_OCI.20250305T174755.L2.OC_AOP.V3_1.nc_3.1",
+        "collection-concept-id": "C3620139598-OB_CLOUD",
+        "provider-id": "OB_CLOUD",
+        "format": "application/vnd.nasa.cmr.umm+json",
+        "revision-date": "2025-09-20T15:10:41.266Z"
+      },
+      "umm": {
+        "TemporalExtent": {
+          "RangeDateTime": {
+            "BeginningDateTime": "2025-03-05T17:47:55Z",
+            "EndingDateTime": "2025-03-05T17:52:55Z"
+          }
+        },
+        "GranuleUR": "PACE_OCI_L2_AOP_PACE_OCI.20250305T174755.L2.OC_AOP.V3_1.nc_3.1",
+        "SpatialExtent": {
+          "HorizontalSpatialDomain": {
+            "Geometry": {
+              "GPolygons": [
+                {
+                  "Boundary": {
+                    "Points": [
+                      {
+                        "Latitude": 55.76101,
+                        "Longitude": -63.58643
+                      },
+                      {
+                        "Latitude": 49.13079,
+                        "Longitude": -102.73132
+                      },
+                      {
+                        "Latitude": 32.44894,
+                        "Longitude": -92.11572
+                      },
+                      {
+                        "Latitude": 38.01264,
+                        "Longitude": -63.0584
+                      },
+                      {
+                        "Latitude": 55.76101,
+                        "Longitude": -63.58643
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "ProviderDates": [
+          {
+            "Type": "Insert",
+            "Date": "2025-09-20T14:23:22Z"
+          },
+          {
+            "Type": "Update",
+            "Date": "2025-09-20T05:52:42.266Z"
+          }
+        ],
+        "CollectionReference": {
+          "ShortName": "PACE_OCI_L2_AOP",
+          "Version": "3.1"
+        },
+        "RelatedUrls": [
+          {
+            "Format": "PNG",
+            "Type": "GET RELATED VISUALIZATION",
+            "URL": "https://oceandata.sci.gsfc.nasa.gov/browse_images/PACE_OCI.20250305T174755.L2.OC_AOP.V3_1.nc.png?file_path=PACE_OCI/IMAGES/EDBRS/2025/0305",
+            "MimeType": "image/png"
+          },
+          {
+            "URL": "https://obdaac-tea.earthdatacloud.nasa.gov/ob-cumulus-prod-public/PACE_OCI.20250305T174755.L2.OC_AOP.V3_1.nc",
+            "Description": "Download PACE_OCI.20250305T174755.L2.OC_AOP.V3_1.nc",
+            "Type": "GET DATA"
+          },
+          {
+            "URL": "s3://ob-cumulus-prod-public/PACE_OCI.20250305T174755.L2.OC_AOP.V3_1.nc",
+            "Description": "This link provides direct download access via S3 to the granule",
+            "Type": "GET DATA VIA DIRECT ACCESS"
+          },
+          {
+            "URL": "https://obdaac-tea.earthdatacloud.nasa.gov/s3credentials",
+            "Description": "api endpoint to retrieve temporary credentials valid for same-region direct s3 access",
+            "Type": "VIEW RELATED INFORMATION"
+          }
+        ],
+        "CloudCover": 96.7,
+        "DataGranule": {
+          "ArchiveAndDistributionInformation": [
+            {
+              "MimeType": "application/x-netcdf",
+              "Format": "netCDF-4",
+              "Name": "PACE_OCI.20250305T174755.L2.OC_AOP.V3_1.nc",
+              "SizeInBytes": 13638801
+            }
+          ],
+          "Identifiers": [
+            {
+              "Identifier": "PACE_OCI.20250305T174755.L2.OC_AOP.V3_1.nc",
+              "IdentifierType": "ProducerGranuleId"
+            }
+          ],
+          "ProductionDateTime": "2025-09-20T05:52:42.266Z",
+          "DayNightFlag": "Day"
+        },
+        "Platforms": [
+          {
+            "Instruments": [
+              {
+                "ShortName": "OCI"
+              }
+            ],
+            "ShortName": "PACE"
+          }
+        ],
+        "MetadataSpecification": {
+          "URL": "https://cdn.earthdata.nasa.gov/umm/granule/v1.6.6",
+          "Name": "UMM-G",
+          "Version": "1.6.6"
+        }
+      },
+      "size": 13.006974220275879
+    }
+  },
+  {
+    "cloud_hosted": true,
+    "uuid": "f9696115-c1be-4526-81d0-0ec9860558cc",
+    "render_dict": {
+      "meta": {
+        "concept-type": "granule",
+        "concept-id": "G3745242063-OB_CLOUD",
+        "revision-id": 1,
+        "native-id": "PACE_OCI_L2_AOP_PACE_OCI.20250305T192617.L2.OC_AOP.V3_1.nc_3.1",
+        "collection-concept-id": "C3620139598-OB_CLOUD",
+        "provider-id": "OB_CLOUD",
+        "format": "application/vnd.nasa.cmr.umm+json",
+        "revision-date": "2025-09-20T15:10:41.372Z"
+      },
+      "umm": {
+        "TemporalExtent": {
+          "RangeDateTime": {
+            "EndingDateTime": "2025-03-05T19:31:17Z",
+            "BeginningDateTime": "2025-03-05T19:26:17Z"
+          }
+        },
+        "GranuleUR": "PACE_OCI_L2_AOP_PACE_OCI.20250305T192617.L2.OC_AOP.V3_1.nc_3.1",
+        "SpatialExtent": {
+          "HorizontalSpatialDomain": {
+            "Geometry": {
+              "GPolygons": [
+                {
+                  "Boundary": {
+                    "Points": [
+                      {
+                        "Latitude": 55.782,
+                        "Longitude": -88.15441
+                      },
+                      {
+                        "Latitude": 49.14482,
+                        "Longitude": -127.35306
+                      },
+                      {
+                        "Latitude": 32.46915,
+                        "Longitude": -116.69888
+                      },
+                      {
+                        "Latitude": 38.02931,
+                        "Longitude": -87.65542
+                      },
+                      {
+                        "Latitude": 55.782,
+                        "Longitude": -88.15441
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "ProviderDates": [
+          {
+            "Type": "Insert",
+            "Date": "2025-09-20T14:43:42Z"
+          },
+          {
+            "Type": "Update",
+            "Date": "2025-09-20T05:52:07.323Z"
+          }
+        ],
+        "CollectionReference": {
+          "Version": "3.1",
+          "ShortName": "PACE_OCI_L2_AOP"
+        },
+        "RelatedUrls": [
+          {
+            "Format": "PNG",
+            "Type": "GET RELATED VISUALIZATION",
+            "MimeType": "image/png",
+            "URL": "https://oceandata.sci.gsfc.nasa.gov/browse_images/PACE_OCI.20250305T192617.L2.OC_AOP.V3_1.nc.png?file_path=PACE_OCI/IMAGES/EDBRS/2025/0305"
+          },
+          {
+            "URL": "https://obdaac-tea.earthdatacloud.nasa.gov/ob-cumulus-prod-public/PACE_OCI.20250305T192617.L2.OC_AOP.V3_1.nc",
+            "Description": "Download PACE_OCI.20250305T192617.L2.OC_AOP.V3_1.nc",
+            "Type": "GET DATA"
+          },
+          {
+            "URL": "s3://ob-cumulus-prod-public/PACE_OCI.20250305T192617.L2.OC_AOP.V3_1.nc",
+            "Description": "This link provides direct download access via S3 to the granule",
+            "Type": "GET DATA VIA DIRECT ACCESS"
+          },
+          {
+            "URL": "https://obdaac-tea.earthdatacloud.nasa.gov/s3credentials",
+            "Description": "api endpoint to retrieve temporary credentials valid for same-region direct s3 access",
+            "Type": "VIEW RELATED INFORMATION"
+          }
+        ],
+        "CloudCover": 74.3,
+        "DataGranule": {
+          "DayNightFlag": "Day",
+          "ProductionDateTime": "2025-09-20T05:52:07.323Z",
+          "Identifiers": [
+            {
+              "Identifier": "PACE_OCI.20250305T192617.L2.OC_AOP.V3_1.nc",
+              "IdentifierType": "ProducerGranuleId"
+            }
+          ],
+          "ArchiveAndDistributionInformation": [
+            {
+              "Name": "PACE_OCI.20250305T192617.L2.OC_AOP.V3_1.nc",
+              "Format": "netCDF-4",
+              "MimeType": "application/x-netcdf",
+              "SizeInBytes": 9759870
+            }
+          ]
+        },
+        "Platforms": [
+          {
+            "Instruments": [
+              {
+                "ShortName": "OCI"
+              }
+            ],
+            "ShortName": "PACE"
+          }
+        ],
+        "MetadataSpecification": {
+          "URL": "https://cdn.earthdata.nasa.gov/umm/granule/v1.6.6",
+          "Name": "UMM-G",
+          "Version": "1.6.6"
+        }
+      },
+      "size": 9.307737350463867
+    }
+  }
+]
