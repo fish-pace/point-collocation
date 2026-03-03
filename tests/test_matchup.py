@@ -111,13 +111,26 @@ class TestParseTemporalRange:
 # ---------------------------------------------------------------------------
 
 class TestMatchupWithRealFiles:
+    @pytest.fixture(autouse=True)
+    def _patch_resolve(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Store monkeypatch for use in individual tests."""
+        self._monkeypatch = monkeypatch
+
+    def _with_sources(self, sources: list) -> None:
+        """Patch _resolve_earthaccess_sources to return *sources*."""
+        self._monkeypatch.setattr(
+            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            lambda *args, **kwargs: sources,
+        )
+
     def test_extracts_values_from_daily_file(
         self, daily_nc_file: str, points_on_day1: pd.DataFrame
     ) -> None:
         """Values must be extracted and not NaN when points overlap the file."""
+        self._with_sources([daily_nc_file])
         result = matchup(
             points_on_day1,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -128,9 +141,10 @@ class TestMatchupWithRealFiles:
         self, daily_nc_file: str, points_on_day1: pd.DataFrame
     ) -> None:
         """Extracted values must match a direct nearest-neighbour xarray lookup."""
+        self._with_sources([daily_nc_file])
         result = matchup(
             points_on_day1,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -144,9 +158,10 @@ class TestMatchupWithRealFiles:
     def test_two_variables_extracted(
         self, daily_nc_file: str, points_on_day1: pd.DataFrame
     ) -> None:
+        self._with_sources([daily_nc_file])
         result = matchup(
             points_on_day1,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst", "chlor_a"],
             engine="netcdf4",
         )
@@ -159,6 +174,7 @@ class TestMatchupWithRealFiles:
         self, daily_nc_file: str
     ) -> None:
         """Points on a different day get NaN because no source covers them."""
+        self._with_sources([daily_nc_file])
         points_other_day = pd.DataFrame(
             {
                 "lat": [34.0],
@@ -168,7 +184,7 @@ class TestMatchupWithRealFiles:
         )
         result = matchup(
             points_other_day,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -178,9 +194,10 @@ class TestMatchupWithRealFiles:
         self, daily_nc_file: str, points_on_day1: pd.DataFrame
     ) -> None:
         """Requesting a variable not in the dataset results in NaN."""
+        self._with_sources([daily_nc_file])
         result = matchup(
             points_on_day1,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["nonexistent_var"],
             engine="netcdf4",
         )
@@ -190,9 +207,10 @@ class TestMatchupWithRealFiles:
         self, two_day_nc_files: list[str], points_two_days: pd.DataFrame
     ) -> None:
         """Each point is matched to the correct daily file."""
+        self._with_sources(two_day_nc_files)
         result = matchup(
             points_two_days,
-            sources=two_day_nc_files,
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -206,6 +224,7 @@ class TestMatchupWithRealFiles:
         self, eight_day_nc_file: str
     ) -> None:
         """Points within an 8-day composite window are matched."""
+        self._with_sources([eight_day_nc_file])
         points = pd.DataFrame(
             {
                 "lat": [10.0, 10.0],
@@ -215,7 +234,7 @@ class TestMatchupWithRealFiles:
         )
         result = matchup(
             points,
-            sources=[eight_day_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -224,9 +243,10 @@ class TestMatchupWithRealFiles:
     def test_return_diagnostics(
         self, daily_nc_file: str, points_on_day1: pd.DataFrame
     ) -> None:
+        self._with_sources([daily_nc_file])
         out = matchup(
             points_on_day1,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
             return_diagnostics=True,
@@ -241,9 +261,10 @@ class TestMatchupWithRealFiles:
     def test_diagnostics_record_missing_variable(
         self, daily_nc_file: str, points_on_day1: pd.DataFrame
     ) -> None:
+        self._with_sources([daily_nc_file])
         _, report = matchup(
             points_on_day1,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["nope"],
             engine="netcdf4",
             return_diagnostics=True,
@@ -258,9 +279,10 @@ class TestMatchupWithRealFiles:
         # Write garbage bytes so xarray fails to open it
         with open(bad, "wb") as f:
             f.write(b"not a netcdf file")
+        self._with_sources([bad])
         _, report = matchup(
             points_on_day1,
-            sources=[bad],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
             return_diagnostics=True,
@@ -272,6 +294,7 @@ class TestMatchupWithRealFiles:
         self, daily_nc_file: str
     ) -> None:
         """Extra columns in points are preserved in the output."""
+        self._with_sources([daily_nc_file])
         points = pd.DataFrame(
             {
                 "lat": [34.0],
@@ -282,7 +305,7 @@ class TestMatchupWithRealFiles:
         )
         result = matchup(
             points,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -293,6 +316,7 @@ class TestMatchupWithRealFiles:
         self, doy_daily_nc_file: str
     ) -> None:
         """DOY-style filenames are parsed and points are matched correctly."""
+        self._with_sources([doy_daily_nc_file])
         # 2023-06-01 is DOY 152
         points = pd.DataFrame(
             {
@@ -303,7 +327,7 @@ class TestMatchupWithRealFiles:
         )
         result = matchup(
             points,
-            sources=[doy_daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -338,9 +362,13 @@ class TestMultiDimVariableExtraction:
         return str(path)
 
     def test_multidim_var_expands_to_per_wavelength_columns(
-        self, pace_rrs_nc_file: str
+        self, pace_rrs_nc_file: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Rrs(lat,lon,wavelength) must produce Rrs_412, Rrs_443, Rrs_490."""
+        monkeypatch.setattr(
+            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            lambda *args, **kwargs: [pace_rrs_nc_file],
+        )
         points = pd.DataFrame(
             {
                 "lat": [34.0, -10.0],
@@ -350,7 +378,7 @@ class TestMultiDimVariableExtraction:
         )
         result = matchup(
             points,
-            sources=[pace_rrs_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["Rrs"],
             engine="netcdf4",
         )
@@ -361,9 +389,13 @@ class TestMultiDimVariableExtraction:
         assert "Rrs" not in result.columns
 
     def test_multidim_var_values_match_dataset(
-        self, pace_rrs_nc_file: str
+        self, pace_rrs_nc_file: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Extracted Rrs values must match a direct xarray nearest-neighbour lookup."""
+        monkeypatch.setattr(
+            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            lambda *args, **kwargs: [pace_rrs_nc_file],
+        )
         points = pd.DataFrame(
             {
                 "lat": [34.0],
@@ -373,7 +405,7 @@ class TestMultiDimVariableExtraction:
         )
         result = matchup(
             points,
-            sources=[pace_rrs_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["Rrs"],
             engine="netcdf4",
         )
@@ -384,7 +416,8 @@ class TestMultiDimVariableExtraction:
                 assert math.isclose(result.loc[0, f"Rrs_{wl}"], expected, rel_tol=1e-5)
 
     def test_multidim_and_scalar_vars_coexist(
-        self, pace_rrs_nc_file: str, daily_nc_file: str, tmp_path: pathlib.Path
+        self, pace_rrs_nc_file: str, daily_nc_file: str, tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Requesting both a scalar and multi-dim variable at once must work."""
         # Build a combined dataset (scalar sst + multi-dim Rrs) in one file.
@@ -399,6 +432,10 @@ class TestMultiDimVariableExtraction:
         )
         combined.to_netcdf(combined_path, engine="netcdf4")
 
+        monkeypatch.setattr(
+            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            lambda *args, **kwargs: [combined_path],
+        )
         points = pd.DataFrame(
             {
                 "lat": [34.0],
@@ -408,7 +445,7 @@ class TestMultiDimVariableExtraction:
         )
         result = matchup(
             points,
-            sources=[combined_path],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst", "Rrs"],
             engine="netcdf4",
         )
@@ -436,16 +473,21 @@ class TestEarthAccessAdapterIntegration:
         ds.close()
 
     def test_adapter_used_as_source_in_matchup(
-        self, daily_nc_file: str, points_on_day1: pd.DataFrame
+        self, daily_nc_file: str, points_on_day1: pd.DataFrame,
+        monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from earthaccess_matchup.adapters.earthaccess import EarthAccessAdapter
 
         adapter = EarthAccessAdapter(source=daily_nc_file)
         # Manually give the adapter an identifiable path attribute
         adapter._source = daily_nc_file  # path string → get_source_id works
+        monkeypatch.setattr(
+            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            lambda *args, **kwargs: [adapter],
+        )
         result = matchup(
             points_on_day1,
-            sources=[adapter],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -457,6 +499,13 @@ class TestEarthAccessAdapterIntegration:
 # ---------------------------------------------------------------------------
 
 class TestDateColumnNormalisation:
+    @pytest.fixture(autouse=True)
+    def _patch_resolve(self, monkeypatch: pytest.MonkeyPatch, daily_nc_file: str) -> None:
+        monkeypatch.setattr(
+            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            lambda *args, **kwargs: [daily_nc_file],
+        )
+
     def test_date_column_accepted_as_time(
         self, daily_nc_file: str
     ) -> None:
@@ -470,7 +519,7 @@ class TestDateColumnNormalisation:
         )
         result = matchup(
             points,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -490,7 +539,7 @@ class TestDateColumnNormalisation:
         )
         result = matchup(
             points,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -510,7 +559,7 @@ class TestDateColumnNormalisation:
         )
         result = matchup(
             points,
-            sources=[daily_nc_file],
+            source_kwargs={"short_name": "TEST"},
             variables=["sst"],
             engine="netcdf4",
         )
@@ -523,35 +572,6 @@ class TestDateColumnNormalisation:
 # ---------------------------------------------------------------------------
 
 class TestSourcesValidation:
-    def test_raises_when_neither_sources_nor_data_source(self) -> None:
-        """ValueError when neither sources nor data_source is provided."""
-        points = pd.DataFrame(
-            {
-                "lat": [34.0],
-                "lon": [-120.0],
-                "time": pd.to_datetime(["2023-06-01"]),
-            }
-        )
-        with pytest.raises(ValueError, match="sources.*data_source|data_source.*sources"):
-            matchup(points, variables=["sst"])
-
-    def test_raises_when_both_sources_and_data_source(self) -> None:
-        """ValueError when both sources and data_source are provided."""
-        points = pd.DataFrame(
-            {
-                "lat": [34.0],
-                "lon": [-120.0],
-                "time": pd.to_datetime(["2023-06-01"]),
-            }
-        )
-        with pytest.raises(ValueError, match="not both"):
-            matchup(
-                points,
-                sources=[],
-                variables=["sst"],
-                data_source="earthaccess",
-            )
-
     def test_raises_on_unknown_data_source(self) -> None:
         """ValueError for unsupported data_source values."""
         points = pd.DataFrame(
@@ -563,6 +583,28 @@ class TestSourcesValidation:
         )
         with pytest.raises(ValueError, match="Unknown data_source"):
             matchup(points, variables=["sst"], data_source="s3")
+
+    def test_raises_when_short_name_missing_from_source_kwargs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ValueError when source_kwargs does not contain 'short_name'."""
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_ea = MagicMock()
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "time": pd.to_datetime(["2023-06-01"]),
+            }
+        )
+        sys.modules["earthaccess"] = mock_ea  # type: ignore[assignment]
+        try:
+            with pytest.raises(ValueError, match="short_name"):
+                matchup(points, variables=["sst"], source_kwargs={})
+        finally:
+            sys.modules.pop("earthaccess", None)
 
 
 # ---------------------------------------------------------------------------
@@ -639,8 +681,10 @@ class TestMatchupWithEarthaccessDataSource:
             result = matchup(
                 points,
                 data_source="earthaccess",
-                short_name="PACE_OCI_L3M_RRS",
-                granule_name="*.DAY.*.4km.*",
+                source_kwargs={
+                    "short_name": "PACE_OCI_L3M_RRS",
+                    "granule_name": "*.DAY.*.4km.*",
+                },
                 variables=["Rrs"],
                 engine="netcdf4",
             )
@@ -649,8 +693,8 @@ class TestMatchupWithEarthaccessDataSource:
 
         mock_ea.search_data.assert_called_once_with(
             short_name="PACE_OCI_L3M_RRS",
-            temporal=(date, date),
             granule_name="*.DAY.*.4km.*",
+            temporal=(date, date),
         )
         assert "Rrs" in result.columns
         assert len(result) == len(points)
@@ -698,8 +742,10 @@ class TestMatchupWithEarthaccessDataSource:
             result = matchup(
                 points,
                 data_source="earthaccess",
-                short_name="PACE_OCI_L3M_RRS",
-                granule_name="*.DAY.*.4km.*",
+                source_kwargs={
+                    "short_name": "PACE_OCI_L3M_RRS",
+                    "granule_name": "*.DAY.*.4km.*",
+                },
                 variables=["Rrs"],
                 engine="netcdf4",
             )
@@ -734,8 +780,10 @@ class TestMatchupWithEarthaccessDataSource:
             result = matchup(
                 df,
                 data_source="earthaccess",
-                short_name="PACE_OCI_L3M_RRS",
-                granule_name="*.DAY.*.4km.*",
+                source_kwargs={
+                    "short_name": "PACE_OCI_L3M_RRS",
+                    "granule_name": "*.DAY.*.4km.*",
+                },
                 variables=["Rrs"],
                 engine="netcdf4",
             )
@@ -770,7 +818,7 @@ class TestMatchupWithEarthaccessDataSource:
             result = matchup(
                 points,
                 data_source="earthaccess",
-                short_name="PACE_OCI_L3M_RRS",
+                source_kwargs={"short_name": "PACE_OCI_L3M_RRS"},
                 variables=["Rrs"],
             )
         finally:

@@ -7,17 +7,15 @@ found/missing, per-point warnings, and file-open errors.
 
 Run::
 
-    python -m examples.diagnostics
-    # or
     python examples/diagnostics.py
 
 What it shows
 -------------
+* Using ``data_source='earthaccess'`` with ``return_diagnostics=True``.
 * Requesting a variable that exists and one that does not.
-* Including a deliberately broken source file to trigger an error path.
 * Reading the MatchupReport: total / succeeded / skipped counts, elapsed
   time, and per-granule details.
-* How warnings surface when a point-level extraction fails gracefully.
+* Requires earthdata authentication (``earthaccess.login()``).
 """
 
 from __future__ import annotations
@@ -27,19 +25,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import earthaccess
 import pandas as pd
 
 import earthaccess_matchup as eam
-from examples._fixtures import FIXTURES_DIR, make_daily
+
+earthaccess.login()
 
 # ---------------------------------------------------------------------------
 # 1. Points table.
 # ---------------------------------------------------------------------------
 df_points = pd.DataFrame(
     {
-        "lat": [45.0, -20.0, 70.0],
-        "lon": [-60.0, 80.0, 30.0],
-        "time": pd.to_datetime(["2023-07-15", "2023-07-15", "2023-07-15"]),
+        "lat": [30.0, -20.0, 45.0],
+        "lon": [-89.0, 80.0, 30.0],
+        "time": pd.to_datetime(["2025-04-09", "2025-04-09", "2025-04-09"]),
     }
 )
 
@@ -48,41 +48,30 @@ print(df_points.to_string(index=False))
 print()
 
 # ---------------------------------------------------------------------------
-# 2. Sources: one valid file + one deliberately broken file.
-# ---------------------------------------------------------------------------
-good_file = make_daily("20230715", seed=99)
-
-bad_file = FIXTURES_DIR / "AQUA_MODIS.20230715.L3m.DAY.BROKEN.nc"
-bad_file.write_bytes(b"not a valid netcdf file")  # intentionally corrupt
-
-sources = [good_file, str(bad_file)]
-print("Sources:")
-for s in sources:
-    print(f"  {Path(s).name}")
-print()
-
-# ---------------------------------------------------------------------------
-# 3. Run matchup with diagnostics enabled.
-#    Request 'sst' (present) and 'Rrs_443' (absent) to show the
-#    variables_found / variables_missing tracking.
+# 2. Run matchup with diagnostics enabled.
+#    Request 'Rrs' (present in PACE OCI RRS) and 'nonexistent_var' (absent)
+#    to show the variables_found / variables_missing tracking.
 # ---------------------------------------------------------------------------
 result, report = eam.matchup(
     df_points,
-    sources,
-    variables=["sst", "Rrs_443"],
-    engine="netcdf4",
+    data_source="earthaccess",
+    source_kwargs={
+        "short_name": "PACE_OCI_L3M_RRS",
+        "granule_name": "*.DAY.*.4km.*",
+    },
+    variables=["Rrs", "nonexistent_var"],
     return_diagnostics=True,
 )
 
 # ---------------------------------------------------------------------------
-# 4. Print result DataFrame.
+# 3. Print result DataFrame.
 # ---------------------------------------------------------------------------
 print("Matchup result:")
 print(result.to_string(index=False))
 print()
 
 # ---------------------------------------------------------------------------
-# 5. Print full diagnostics report.
+# 4. Print full diagnostics report.
 # ---------------------------------------------------------------------------
 print(f"Summary: {report.summary()}")
 print()

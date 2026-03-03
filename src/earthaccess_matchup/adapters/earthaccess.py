@@ -10,16 +10,16 @@ Usage
 
     import earthaccess
     import earthaccess_matchup as eam
-    from earthaccess_matchup.adapters.earthaccess import EarthAccessAdapter
 
-    results = earthaccess.search_data(...)
-    files = earthaccess.open(results)
-
-    # The top-level eam.matchup() wraps this automatically when it
-    # detects earthaccess file-like objects; the adapter can also be
-    # used directly for advanced use-cases.
-    sources = [EarthAccessAdapter(f) for f in files]
-    out = eam.matchup(df_points, sources, variables=["sst"])
+    out = eam.matchup(
+        df_points,
+        data_source="earthaccess",
+        source_kwargs={
+            "short_name": "PACE_OCI_L3M_RRS",
+            "granule_name": "*.DAY.*.4km.*",
+        },
+        variables=["Rrs"],
+    )
 
 Responsibilities
 ----------------

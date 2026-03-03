@@ -70,44 +70,48 @@ class TestMatchupSignature:
         sig = inspect.signature(matchup)
         params = sig.parameters
         assert "points" in params
-        assert "sources" in params
+        assert "source_kwargs" in params
         assert "variables" in params
 
-    def test_nc_type_has_default(self) -> None:
+    def test_data_source_defaults_to_earthaccess(self) -> None:
         sig = inspect.signature(matchup)
-        assert sig.parameters["nc_type"].default == "flat"
-
-    def test_return_diagnostics_has_default_false(self) -> None:
-        sig = inspect.signature(matchup)
-        assert sig.parameters["return_diagnostics"].default is False
+        assert sig.parameters["data_source"].default == "earthaccess"
 
 
 class TestMatchupBehaviour:
+    @pytest.fixture(autouse=True)
+    def _patch_resolve(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Patch _resolve_earthaccess_sources to return an empty list."""
+        monkeypatch.setattr(
+            "earthaccess_matchup.core.engine._resolve_earthaccess_sources",
+            lambda *args, **kwargs: [],
+        )
+
     def test_returns_dataframe_by_default(self) -> None:
         points = _make_points()
-        result = matchup(points, sources=[], variables=["sst"])
+        result = matchup(points, source_kwargs={"short_name": "TEST"}, variables=["sst"])
         assert isinstance(result, pd.DataFrame)
 
     def test_result_preserves_original_columns(self) -> None:
         points = _make_points(station_id=["A", "B"])
-        result = matchup(points, sources=[], variables=["sst"])
+        result = matchup(points, source_kwargs={"short_name": "TEST"}, variables=["sst"])
         for col in ("lat", "lon", "time", "station_id"):
             assert col in result.columns
 
     def test_result_has_variable_columns(self) -> None:
         points = _make_points()
-        result = matchup(points, sources=[], variables=["sst", "chlor_a"])
+        result = matchup(points, source_kwargs={"short_name": "TEST"}, variables=["sst", "chlor_a"])
         assert "sst" in result.columns
         assert "chlor_a" in result.columns
 
     def test_result_rows_match_input(self) -> None:
         points = _make_points()
-        result = matchup(points, sources=[], variables=["sst"])
+        result = matchup(points, source_kwargs={"short_name": "TEST"}, variables=["sst"])
         assert len(result) == len(points)
 
     def test_return_diagnostics_returns_tuple(self) -> None:
         points = _make_points()
-        out = matchup(points, sources=[], variables=["sst"], return_diagnostics=True)
+        out = matchup(points, source_kwargs={"short_name": "TEST"}, variables=["sst"], return_diagnostics=True)
         assert isinstance(out, tuple)
         df, report = out
         assert isinstance(df, pd.DataFrame)
@@ -116,22 +120,22 @@ class TestMatchupBehaviour:
     def test_raises_on_missing_lat_column(self) -> None:
         bad = pd.DataFrame({"lon": [1.0], "time": pd.to_datetime(["2023-01-01"])})
         with pytest.raises(ValueError, match="lat"):
-            matchup(bad, sources=[], variables=["sst"])
+            matchup(bad, source_kwargs={"short_name": "TEST"}, variables=["sst"])
 
     def test_raises_on_missing_lon_column(self) -> None:
         bad = pd.DataFrame({"lat": [1.0], "time": pd.to_datetime(["2023-01-01"])})
         with pytest.raises(ValueError, match="lon"):
-            matchup(bad, sources=[], variables=["sst"])
+            matchup(bad, source_kwargs={"short_name": "TEST"}, variables=["sst"])
 
     def test_raises_on_missing_time_column(self) -> None:
         bad = pd.DataFrame({"lat": [1.0], "lon": [2.0]})
         with pytest.raises(ValueError, match="time"):
-            matchup(bad, sources=[], variables=["sst"])
+            matchup(bad, source_kwargs={"short_name": "TEST"}, variables=["sst"])
 
     def test_empty_sources_returns_nan_variables(self) -> None:
         import math
         points = _make_points()
-        result = matchup(points, sources=[], variables=["sst"])
+        result = matchup(points, source_kwargs={"short_name": "TEST"}, variables=["sst"])
         assert all(math.isnan(v) for v in result["sst"])
 
 

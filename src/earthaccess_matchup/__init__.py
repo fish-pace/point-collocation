@@ -13,20 +13,22 @@ Quick start
     import earthaccess_matchup as eam
     import pandas as pd
 
+    earthaccess.login()
+
     df_points = pd.DataFrame({
         "lat": [34.5, 35.1],
         "lon": [-120.3, -119.8],
         "time": pd.to_datetime(["2023-06-01", "2023-06-02"]),
     })
 
-    results = earthaccess.search_data(...)
-    sources = earthaccess.open(results)
-
     out = eam.matchup(
         df_points,
-        sources,
-        variables=["sst", "chlor_a"],
-        nc_type="flat",
+        data_source="earthaccess",
+        source_kwargs={
+            "short_name": "PACE_OCI_L3M_RRS",
+            "granule_name": "*.DAY.*.4km.*",
+        },
+        variables=["Rrs"],
     )
 
 Optional xarray accessor
