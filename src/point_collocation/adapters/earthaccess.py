@@ -9,9 +9,9 @@ Usage
 ::
 
     import earthaccess
-    import point_collocation as eam
+    import point_collocation as pc
 
-    out = eam.matchup(
+    out = pc.matchup(
         df_points,
         data_source="earthaccess",
         source_kwargs={

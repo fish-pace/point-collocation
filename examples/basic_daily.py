@@ -11,7 +11,7 @@ Run::
 What it shows
 -------------
 * Building a minimal ``df_points`` DataFrame manually.
-* Calling ``eam.matchup()`` with ``data_source='earthaccess'`` and
+* Calling ``pc.matchup()`` with ``data_source='earthaccess'`` and
   ``source_kwargs`` specifying the collection to search.
 * Inspecting the returned DataFrame.
 * Requires earthdata authentication (``earthaccess.login()``).
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import earthaccess
 import pandas as pd
 
-import point_collocation as eam
+import point_collocation as pc
 
 earthaccess.login()
 
@@ -55,7 +55,7 @@ print()
 #    data_source='earthaccess' searches NASA Earthdata automatically;
 #    source_kwargs are passed directly to earthaccess.search_data().
 # ---------------------------------------------------------------------------
-result = eam.matchup(
+result = pc.matchup(
     df_points,
     data_source="earthaccess",
     source_kwargs={

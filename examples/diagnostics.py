@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import earthaccess
 import pandas as pd
 
-import point_collocation as eam
+import point_collocation as pc
 
 earthaccess.login()
 
@@ -52,7 +52,7 @@ print()
 #    Request 'Rrs' (present in PACE OCI RRS) and 'nonexistent_var' (absent)
 #    to show the variables_found / variables_missing tracking.
 # ---------------------------------------------------------------------------
-result, report = eam.matchup(
+result, report = pc.matchup(
     df_points,
     data_source="earthaccess",
     source_kwargs={

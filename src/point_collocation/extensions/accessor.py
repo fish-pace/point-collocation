@@ -1,4 +1,4 @@
-"""Optional xarray accessor — ``xarray.Dataset.eam``.
+"""Optional xarray accessor — ``xarray.Dataset.pc``.
 
 Why include an accessor?
 ------------------------
@@ -11,10 +11,10 @@ Registration
 The accessor is **not** registered automatically on import of the
 top-level package.  Users must opt in::
 
-    import point_collocation.extensions.accessor  # registers .eam
+    import point_collocation.extensions.accessor  # registers .pc
 
     ds = xr.open_dataset(...)
-    matched = ds.eam.extract_points(df_points, variables=["sst"])
+    matched = ds.pc.extract_points(df_points, variables=["sst"])
 
 The accessor depends only on ``xarray`` and ``pandas``, both of which
 are core dependencies, so no additional optional install is required.
@@ -27,9 +27,9 @@ from __future__ import annotations
 import xarray as xr
 
 
-@xr.register_dataset_accessor("eam")
-class EarthAccessMatchupAccessor:
-    """``xarray.Dataset.eam`` accessor for interactive point extraction.
+@xr.register_dataset_accessor("pc")
+class PointCollocationAccessor:
+    """``xarray.Dataset.pc`` accessor for interactive point extraction.
 
     Attach to any open ``xarray.Dataset`` to extract matchup values
     without assembling a full source list.

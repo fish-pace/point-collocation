@@ -10,7 +10,7 @@ Run::
 
 What it shows
 -------------
-* Points spread across multiple dates in a single ``eam.matchup()`` call.
+* Points spread across multiple dates in a single ``pc.matchup()`` call.
 * The engine queries earthaccess once per unique date, so only the
   granules needed for the requested points are opened.
 * Using ``return_diagnostics=True`` to inspect timing and per-granule
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import earthaccess
 import pandas as pd
 
-import point_collocation as eam
+import point_collocation as pc
 
 earthaccess.login()
 
@@ -60,7 +60,7 @@ print()
 # 2. Run matchup with diagnostics enabled.
 #    source_kwargs are forwarded directly to earthaccess.search_data().
 # ---------------------------------------------------------------------------
-result, report = eam.matchup(
+result, report = pc.matchup(
     df_points,
     data_source="earthaccess",
     source_kwargs={

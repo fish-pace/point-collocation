@@ -7,7 +7,7 @@ import inspect
 import pandas as pd
 import pytest
 
-import point_collocation as eam
+import point_collocation as pc
 from point_collocation.core.engine import matchup
 from point_collocation.core.types import SourceProtocol
 from point_collocation.diagnostics.report import GranuleSummary, MatchupReport
@@ -40,13 +40,13 @@ class _StubSource:
 
 class TestPublicAPI:
     def test_matchup_importable_from_top_level(self) -> None:
-        assert callable(eam.matchup)
+        assert callable(pc.matchup)
 
     def test_matchup_is_same_object_as_engine(self) -> None:
-        assert eam.matchup is matchup
+        assert pc.matchup is matchup
 
     def test_all_contains_matchup(self) -> None:
-        assert "matchup" in eam.__all__
+        assert "matchup" in pc.__all__
 
 
 # ---------------------------------------------------------------------------

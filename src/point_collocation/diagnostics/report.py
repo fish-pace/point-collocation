@@ -63,7 +63,7 @@ class MatchupReport:
     --------
     ::
 
-        out, report = eam.matchup(..., return_diagnostics=True)
+        out, report = pc.matchup(..., return_diagnostics=True)
         print(report.summary())
     """
 
