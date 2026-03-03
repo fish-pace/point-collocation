@@ -24,3 +24,5 @@ htmlcov/
 
 # Generated example fixture files
 examples/fixtures/*.nc
+
+*-checkpoint*
