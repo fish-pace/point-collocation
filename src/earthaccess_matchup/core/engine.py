@@ -171,7 +171,7 @@ def matchup(
             if hasattr(source, "open_dataset"):
                 ds = source.open_dataset(**open_dataset_kwargs)
                 try:
-                    vars_found, vars_missing, warns, newly_expanded = _extract_into(
+                    result, vars_found, vars_missing, warns, newly_expanded = _extract_into(
                         result, ds, pts_subset, variables
                     )
                 finally:
@@ -182,7 +182,7 @@ def matchup(
                 if "engine" not in kwargs:
                     kwargs["engine"] = "h5netcdf"
                 with xr.open_dataset(source, **kwargs) as ds:
-                    vars_found, vars_missing, warns, newly_expanded = _extract_into(
+                    result, vars_found, vars_missing, warns, newly_expanded = _extract_into(
                         result, ds, pts_subset, variables
                     )
             vars_expanded.update(newly_expanded)
@@ -322,14 +322,15 @@ def _extract_into(
     ds: xr.Dataset,
     pts_subset: pd.DataFrame,
     variables: list[str],
-) -> tuple[list[str], list[str], list[str], list[str]]:
+) -> tuple[pd.DataFrame, list[str], list[str], list[str], list[str]]:
     """Extract *variables* from *ds* at each row of *pts_subset*.
 
-    Values are written directly into *result* (in-place) using the
-    index from *pts_subset*.
+    Values are written into *result* using the index from *pts_subset*.
 
     Returns
     -------
+    result:
+        Updated DataFrame with extracted values.
     vars_found:
         Variables that were present in the dataset.
     vars_missing:
@@ -348,6 +349,11 @@ def _extract_into(
     vars_missing: list[str] = []
     warnings: list[str] = []
     vars_expanded: list[str] = []
+
+    # Collect expanded column data here to avoid inserting columns one-by-one,
+    # which causes a pandas PerformanceWarning about DataFrame fragmentation.
+    # key: col_name, value: dict of {index -> scalar value}
+    all_expanded: dict[str, dict] = {}
 
     for var in variables:
         if var not in ds:
@@ -378,7 +384,7 @@ def _extract_into(
                     _var_expanded = True
                     for coord_val, val in selected.to_series().items():
                         col_name = f"{var}_{int(coord_val)}"
-                        result.loc[idx, col_name] = val
+                        all_expanded.setdefault(col_name, {})[idx] = val
             except Exception as exc:
                 warnings.append(
                     f"Could not extract {var!r} at index {idx} "
@@ -387,4 +393,16 @@ def _extract_into(
         if _var_expanded:
             vars_expanded.append(var)
 
-    return vars_found, vars_missing, warnings, vars_expanded
+    # Add all expanded columns at once using pd.concat to avoid fragmentation.
+    # For subsequent source files, columns may already exist — fill their NaN
+    # values rather than creating duplicate columns.
+    if all_expanded:
+        new_cols = pd.DataFrame(all_expanded, index=result.index)
+        truly_new = [c for c in new_cols.columns if c not in result.columns]
+        already_exist = [c for c in new_cols.columns if c in result.columns]
+        if truly_new:
+            result = pd.concat([result, new_cols[truly_new]], axis=1)
+        for col in already_exist:
+            result[col] = result[col].fillna(new_cols[col])
+
+    return result, vars_found, vars_missing, warnings, vars_expanded
