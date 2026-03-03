@@ -45,9 +45,12 @@ _LON_NAMES = ("lon", "longitude", "Longitude", "LON")
 
 def matchup(
     points: PointsFrame,
-    sources: Iterable[object],
+    sources: Iterable[object] | None = None,
     *,
     variables: list[str],
+    data_source: str | None = None,
+    short_name: str | None = None,
+    granule_name: str | None = None,
     nc_type: Literal["grouped", "flat"] = "flat",
     return_diagnostics: bool = False,
     **open_dataset_kwargs: object,
@@ -58,15 +61,30 @@ def matchup(
     ----------
     points:
         ``DataFrame`` with at minimum the columns ``lat``, ``lon``, and
-        ``time``.  Additional columns are preserved in the output.
+        ``time`` (or ``date`` as an alias for ``time``).  Additional
+        columns are preserved in the output.  Results are returned in the
+        same row order as *points*.
     sources:
         An iterable of file-like objects (e.g., from
         ``earthaccess.open()``) or objects satisfying
         :class:`~earthaccess_matchup.core.types.SourceProtocol`.
         Only sources whose temporal coverage overlaps the requested
-        points are opened, minimising unnecessary I/O.
+        points are opened, minimising unnecessary I/O.  May be ``None``
+        when *data_source* is provided.
     variables:
         Names of the dataset variables to extract at each point.
+    data_source:
+        When set to ``"earthaccess"``, files are located automatically
+        via ``earthaccess.search_data()`` using *short_name* and
+        *granule_name*; *sources* must be ``None`` in this case.
+    short_name:
+        NASA CMR short name for the collection, e.g.
+        ``"PACE_OCI_L3M_RRS"``.  Required when *data_source* is
+        ``"earthaccess"``.
+    granule_name:
+        Glob-style pattern passed to ``earthaccess.search_data()`` to
+        filter granules, e.g. ``"*.DAY.*.4km.*"``.  Required when
+        *data_source* is ``"earthaccess"``.
     nc_type:
         ``"grouped"`` for NetCDF files that use groups (e.g., PACE),
         ``"flat"`` for conventional flat NetCDF/Zarr files.
@@ -84,7 +102,7 @@ def matchup(
     pandas.DataFrame
         Original ``points`` columns plus one new column per variable in
         ``variables``.  Rows that could not be matched are preserved with
-        ``NaN`` in the new columns.
+        ``NaN`` in the new columns.  Row order matches the input.
     MatchupReport
         Only returned when ``return_diagnostics=True``.
 
@@ -92,9 +110,31 @@ def matchup(
     ------
     ValueError
         If ``points`` is missing required columns (``lat``, ``lon``,
-        ``time``).
+        ``time``/``date``), or if neither *sources* nor *data_source* is
+        provided.
     """
+    points = _normalise_time_column(points)
     _validate_points(points)
+
+    if data_source is not None:
+        if sources is not None:
+            raise ValueError(
+                "Provide either 'sources' or 'data_source', not both."
+            )
+        if data_source == "earthaccess":
+            sources = _resolve_earthaccess_sources(
+                points, short_name=short_name, granule_name=granule_name
+            )
+        else:
+            raise ValueError(
+                f"Unknown data_source {data_source!r}. "
+                "Currently only 'earthaccess' is supported."
+            )
+    elif sources is None:
+        raise ValueError(
+            "Either 'sources' or 'data_source' must be provided."
+        )
+
     report = MatchupReport()
 
     result = points.copy()
@@ -171,6 +211,20 @@ def matchup(
 _REQUIRED_COLUMNS = {"lat", "lon", "time"}
 
 
+def _normalise_time_column(points: PointsFrame) -> PointsFrame:
+    """Return *points* with a ``time`` column, renaming ``date`` if needed.
+
+    If ``time`` is already present, *points* is returned unchanged.
+    If ``time`` is absent but ``date`` is present, a copy is returned
+    with ``date`` renamed to ``time``.
+    """
+    if "time" in points.columns:
+        return points
+    if "date" in points.columns:
+        return points.rename(columns={"date": "time"})
+    return points
+
+
 def _validate_points(points: PointsFrame) -> None:
     """Raise ``ValueError`` if *points* is missing required columns."""
     missing = _REQUIRED_COLUMNS - set(points.columns)
@@ -178,6 +232,72 @@ def _validate_points(points: PointsFrame) -> None:
         raise ValueError(
             f"points DataFrame is missing required columns: {sorted(missing)}"
         )
+
+
+def _resolve_earthaccess_sources(
+    points: PointsFrame,
+    *,
+    short_name: str | None,
+    granule_name: str | None,
+) -> list[object]:
+    """Search earthaccess for granules covering each unique date in *points*.
+
+    Iterates over unique dates, calls ``earthaccess.search_data()`` for
+    each date (``temporal=(date, date)``), then opens all found granules
+    with ``earthaccess.open()``.
+
+    Parameters
+    ----------
+    points:
+        Points DataFrame with a ``time`` column.
+    short_name:
+        NASA CMR short name (e.g. ``"PACE_OCI_L3M_RRS"``).
+    granule_name:
+        Glob-style granule name filter (e.g. ``"*.DAY.*.4km.*"``).
+
+    Returns
+    -------
+    list
+        Flat list of file-like objects returned by ``earthaccess.open()``.
+
+    Raises
+    ------
+    ImportError
+        If the ``earthaccess`` package is not installed.
+    ValueError
+        If *short_name* is not provided.
+    """
+    try:
+        import earthaccess  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(
+            "The 'earthaccess' package is required when data_source='earthaccess'. "
+            "Install it with: pip install earthaccess"
+        ) from exc
+
+    if short_name is None:
+        raise ValueError(
+            "'short_name' must be provided when data_source='earthaccess'."
+        )
+
+    unique_dates = sorted(
+        pd.to_datetime(points["time"]).dt.normalize().unique()
+    )
+
+    all_sources: list[object] = []
+    for date in unique_dates:
+        date_str = date.strftime("%Y-%m-%d")
+        search_kwargs: dict[str, str | tuple[str, str]] = {
+            "short_name": short_name,
+            "temporal": (date_str, date_str),
+        }
+        if granule_name is not None:
+            search_kwargs["granule_name"] = granule_name
+        results = earthaccess.search_data(**search_kwargs)
+        if results:
+            opened = earthaccess.open(results)
+            all_sources.extend(opened)
+    return all_sources
 
 
 def _find_coord(ds: xr.Dataset, candidates: tuple[str, ...]) -> str | None:

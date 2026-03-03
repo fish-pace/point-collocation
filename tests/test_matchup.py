@@ -341,3 +341,332 @@ class TestEarthAccessAdapterIntegration:
             engine="netcdf4",
         )
         assert not result["sst"].isna().all()
+
+
+# ---------------------------------------------------------------------------
+# date column normalisation
+# ---------------------------------------------------------------------------
+
+class TestDateColumnNormalisation:
+    def test_date_column_accepted_as_time(
+        self, daily_nc_file: str
+    ) -> None:
+        """A 'date' column is treated as a synonym for 'time'."""
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "date": pd.to_datetime(["2023-06-01"]),
+            }
+        )
+        result = matchup(
+            points,
+            sources=[daily_nc_file],
+            variables=["sst"],
+            engine="netcdf4",
+        )
+        assert "sst" in result.columns
+        assert not math.isnan(result.loc[0, "sst"])
+
+    def test_date_column_renamed_to_time_in_output(
+        self, daily_nc_file: str
+    ) -> None:
+        """When 'date' is renamed to 'time', output contains 'time' column."""
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "date": pd.to_datetime(["2023-06-01"]),
+            }
+        )
+        result = matchup(
+            points,
+            sources=[daily_nc_file],
+            variables=["sst"],
+            engine="netcdf4",
+        )
+        assert "time" in result.columns
+
+    def test_time_column_takes_precedence_over_date(
+        self, daily_nc_file: str
+    ) -> None:
+        """When both 'time' and 'date' are present, 'time' is used."""
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "time": pd.to_datetime(["2023-06-01"]),
+                "date": pd.to_datetime(["2023-07-01"]),  # different, should be ignored
+            }
+        )
+        result = matchup(
+            points,
+            sources=[daily_nc_file],
+            variables=["sst"],
+            engine="netcdf4",
+        )
+        # Point matches on 2023-06-01 (time), not 2023-07-01 (date)
+        assert not math.isnan(result.loc[0, "sst"])
+
+
+# ---------------------------------------------------------------------------
+# Sources / data_source validation
+# ---------------------------------------------------------------------------
+
+class TestSourcesValidation:
+    def test_raises_when_neither_sources_nor_data_source(self) -> None:
+        """ValueError when neither sources nor data_source is provided."""
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "time": pd.to_datetime(["2023-06-01"]),
+            }
+        )
+        with pytest.raises(ValueError, match="sources.*data_source|data_source.*sources"):
+            matchup(points, variables=["sst"])
+
+    def test_raises_when_both_sources_and_data_source(self) -> None:
+        """ValueError when both sources and data_source are provided."""
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "time": pd.to_datetime(["2023-06-01"]),
+            }
+        )
+        with pytest.raises(ValueError, match="not both"):
+            matchup(
+                points,
+                sources=[],
+                variables=["sst"],
+                data_source="earthaccess",
+            )
+
+    def test_raises_on_unknown_data_source(self) -> None:
+        """ValueError for unsupported data_source values."""
+        points = pd.DataFrame(
+            {
+                "lat": [34.0],
+                "lon": [-120.0],
+                "time": pd.to_datetime(["2023-06-01"]),
+            }
+        )
+        with pytest.raises(ValueError, match="Unknown data_source"):
+            matchup(points, variables=["sst"], data_source="s3")
+
+
+# ---------------------------------------------------------------------------
+# earthaccess data_source integration (mocked)
+# ---------------------------------------------------------------------------
+
+_FIXTURES_CSV = (
+    pathlib.Path(__file__).parent.parent / "examples" / "fixtures" / "points.csv"
+)
+
+
+class TestMatchupWithEarthaccessDataSource:
+    """Tests for matchup() using data_source='earthaccess' (mocked)."""
+
+    def _make_fake_ea_file(
+        self, tmp_path: pathlib.Path, date_str: str, seed: int = 0
+    ) -> object:
+        """Return a fake earthaccess file-like object backed by a real NetCDF."""
+        import numpy as np
+
+        lats = np.arange(-90.0, 91.0, 1.0)
+        lons = np.arange(-180.0, 181.0, 1.0)
+        rng = np.random.default_rng(seed)
+        rrs = rng.uniform(0.0, 0.05, (lats.size, lons.size)).astype(np.float32)
+        ds = xr.Dataset(
+            {"Rrs": (["lat", "lon"], rrs)},
+            coords={"lat": lats, "lon": lons},
+        )
+        # Use PACE-style DOY filename so parse_temporal_range works
+        import datetime
+        date = datetime.date.fromisoformat(date_str)
+        doy = date.timetuple().tm_yday
+        fname = f"PACE_OCI_{date.year}{doy:03d}.L3m.DAY.RRS.Rrs.4km.nc"
+        path = tmp_path / fname
+        ds.to_netcdf(path, engine="netcdf4")
+
+        class _FakeEAFile:
+            """Mimics the path attribute of an earthaccess file object."""
+            def __init__(self, p: str) -> None:
+                self.path = p
+
+        return _FakeEAFile(str(path))
+
+    def _mock_earthaccess(self, search_return: object, open_return: object) -> object:
+        """Return a MagicMock that acts as the earthaccess module."""
+        from unittest.mock import MagicMock
+        ea = MagicMock()
+        ea.search_data.return_value = search_return
+        ea.open.return_value = open_return
+        return ea
+
+    def test_matchup_with_mocked_earthaccess(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """matchup() with data_source='earthaccess' calls search_data per date."""
+        import sys
+        from unittest.mock import MagicMock
+
+        date = "2024-06-13"
+        fake_file = self._make_fake_ea_file(tmp_path, date, seed=1)
+        fake_results = [MagicMock()]
+        mock_ea = self._mock_earthaccess(fake_results, [fake_file])
+
+        points = pd.DataFrame(
+            {
+                "lat": [27.3835, 27.119],
+                "lon": [-82.7375, -82.7125],
+                "time": pd.to_datetime([date, date]),
+            }
+        )
+
+        sys.modules["earthaccess"] = mock_ea  # type: ignore[assignment]
+        try:
+            result = matchup(
+                points,
+                data_source="earthaccess",
+                short_name="PACE_OCI_L3M_RRS",
+                granule_name="*.DAY.*.4km.*",
+                variables=["Rrs"],
+                engine="netcdf4",
+            )
+        finally:
+            sys.modules.pop("earthaccess", None)
+
+        mock_ea.search_data.assert_called_once_with(
+            short_name="PACE_OCI_L3M_RRS",
+            temporal=(date, date),
+            granule_name="*.DAY.*.4km.*",
+        )
+        assert "Rrs" in result.columns
+        assert len(result) == len(points)
+
+    def test_matchup_result_order_matches_input(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Results are returned in the same row order as the input points."""
+        import sys
+        from unittest.mock import MagicMock
+
+        # Two different dates so we get different granules
+        dates = ["2024-06-13", "2024-06-14"]
+        fake_files = [
+            self._make_fake_ea_file(tmp_path, d, seed=i)
+            for i, d in enumerate(dates)
+        ]
+
+        points = pd.DataFrame(
+            {
+                "lat": [27.3835, 27.119, 26.9435],
+                "lon": [-82.7375, -82.7125, -82.817],
+                "time": pd.to_datetime([dates[0], dates[1], dates[1]]),
+                "station_id": ["S1", "S2", "S3"],
+            }
+        )
+
+        call_count = [0]
+
+        def fake_search(**kwargs: object) -> list[object]:
+            i = call_count[0]
+            call_count[0] += 1
+            return [MagicMock()]
+
+        def fake_open(results: object) -> list[object]:
+            idx = min(call_count[0] - 1, len(fake_files) - 1)
+            return [fake_files[idx]]
+
+        mock_ea = MagicMock()
+        mock_ea.search_data.side_effect = fake_search
+        mock_ea.open.side_effect = fake_open
+
+        sys.modules["earthaccess"] = mock_ea  # type: ignore[assignment]
+        try:
+            result = matchup(
+                points,
+                data_source="earthaccess",
+                short_name="PACE_OCI_L3M_RRS",
+                granule_name="*.DAY.*.4km.*",
+                variables=["Rrs"],
+                engine="netcdf4",
+            )
+        finally:
+            sys.modules.pop("earthaccess", None)
+
+        # Row count and index order are preserved
+        assert len(result) == 3
+        assert list(result.index) == [0, 1, 2]
+        assert list(result["station_id"]) == ["S1", "S2", "S3"]
+
+    def test_matchup_with_points_csv_date_column(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Loads fixtures/points.csv (which has a 'date' column) and runs matchup."""
+        import sys
+        from unittest.mock import MagicMock
+
+        assert _FIXTURES_CSV.exists(), f"Fixture not found: {_FIXTURES_CSV}"
+
+        # Load a small slice of the CSV (first 3 rows, all on 2024-06-13)
+        df = pd.read_csv(_FIXTURES_CSV, nrows=3)
+        assert "date" in df.columns, "Expected 'date' column in points.csv"
+
+        date_str = df["date"].iloc[0]
+        fake_file = self._make_fake_ea_file(tmp_path, date_str, seed=99)
+        fake_results = [MagicMock()]
+        mock_ea = self._mock_earthaccess(fake_results, [fake_file])
+
+        sys.modules["earthaccess"] = mock_ea  # type: ignore[assignment]
+        try:
+            result = matchup(
+                df,
+                data_source="earthaccess",
+                short_name="PACE_OCI_L3M_RRS",
+                granule_name="*.DAY.*.4km.*",
+                variables=["Rrs"],
+                engine="netcdf4",
+            )
+        finally:
+            sys.modules.pop("earthaccess", None)
+
+        assert "Rrs" in result.columns
+        # Result has same number of rows as input and preserves order
+        assert len(result) == len(df)
+        assert list(result.index) == list(df.index)
+
+    def test_no_search_when_no_results(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """earthaccess.open() is not called when search returns no results."""
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_ea = MagicMock()
+        mock_ea.search_data.return_value = []
+
+        points = pd.DataFrame(
+            {
+                "lat": [27.3835],
+                "lon": [-82.7375],
+                "time": pd.to_datetime(["2024-06-13"]),
+            }
+        )
+
+        sys.modules["earthaccess"] = mock_ea  # type: ignore[assignment]
+        try:
+            result = matchup(
+                points,
+                data_source="earthaccess",
+                short_name="PACE_OCI_L3M_RRS",
+                variables=["Rrs"],
+            )
+        finally:
+            sys.modules.pop("earthaccess", None)
+
+        mock_ea.search_data.assert_called_once()
+        mock_ea.open.assert_not_called()
+        assert math.isnan(result.loc[0, "Rrs"])
