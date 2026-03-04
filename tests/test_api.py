@@ -61,10 +61,14 @@ class TestMatchupSignature:
     def test_no_dataframe_parameters(self) -> None:
         sig = inspect.signature(matchup)
         params = sig.parameters
-        assert "variables" not in params
         assert "data_source" not in params
         assert "source_kwargs" not in params
         assert "return_diagnostics" not in params
+
+    def test_accepts_variables(self) -> None:
+        sig = inspect.signature(matchup)
+        params = sig.parameters
+        assert "variables" in params, "matchup() must accept a variables kwarg"
 
 
 # ---------------------------------------------------------------------------

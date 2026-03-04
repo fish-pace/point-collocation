@@ -38,6 +38,8 @@ _LON_NAMES = ("lon", "longitude", "Longitude", "LON")
 
 def matchup(
     plan: "Plan",
+    *,
+    variables: list[str] | None = None,
     open_dataset_kwargs: dict | None = None,
 ) -> pd.DataFrame:
     """Extract variables from cloud-hosted granules at the given points.
@@ -46,10 +48,17 @@ def matchup(
     ----------
     plan:
         A :class:`~point_collocation.core.plan.Plan` object previously
-        built with :func:`~point_collocation.plan`.  Variables,
-        data source, and search parameters are all taken from the plan.
-        One output row is produced per (point, granule) pair; points
-        with zero matching granules produce a single NaN row.
+        built with :func:`~point_collocation.plan`.  Data source and
+        search parameters are taken from the plan.  One output row is
+        produced per (point, granule) pair; points with zero matching
+        granules produce a single NaN row.
+    variables:
+        Variable names to extract from each granule.  When provided,
+        overrides any variables stored on the plan.  When omitted,
+        falls back to ``plan.variables``.  If the resolved list is
+        empty, the output will have no variable columns.
+        Raises :exc:`ValueError` if a requested variable is not found
+        in the opened dataset.
     open_dataset_kwargs:
         Optional dictionary of keyword arguments forwarded to
         ``xarray.open_dataset`` for every granule opened during the run.
@@ -61,11 +70,17 @@ def matchup(
     -------
     pandas.DataFrame
         One row per (point, granule) pair, including a ``granule_id``
-        column and one column per variable in the plan.  Points with
-        zero matching granules contribute a single NaN row.
+        column and one column per variable.  Points with zero matching
+        granules contribute a single NaN row.
+
+    Raises
+    ------
+    ValueError
+        If a requested variable is not present in an opened dataset.
     """
+    effective_vars: list[str] = variables if variables is not None else plan.variables
     effective_kwargs = {"chunks": {}} if open_dataset_kwargs is None else dict(open_dataset_kwargs)
-    return _execute_plan(plan, variables=plan.variables, **effective_kwargs)
+    return _execute_plan(plan, variables=effective_vars, **effective_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +145,21 @@ def _execute_plan(
                 lat_name = _find_coord(ds, _LAT_NAMES)
                 lon_name = _find_coord(ds, _LON_NAMES)
 
+                # Validate that all requested variables exist in the dataset.
+                missing_vars = [v for v in variables if v not in ds]
+                if missing_vars:
+                    raise ValueError(
+                        f"Variable(s) {missing_vars!r} not found in granule "
+                        f"'{gm.granule_id}'. Available variables: "
+                        f"{list(ds.data_vars)}"
+                    )
+
                 for pt_idx in pt_indices:
                     row = plan.points.loc[pt_idx].to_dict()
                     row["granule_id"] = gm.granule_id
 
                     for var in variables:
-                        if var not in ds or lat_name is None or lon_name is None:
+                        if lat_name is None or lon_name is None:
                             row[var] = float("nan")
                             continue
                         try:
@@ -155,6 +179,8 @@ def _execute_plan(
 
                     output_rows.append(row)
 
+        except ValueError:
+            raise
         except Exception:
             # Granule failed to open → emit NaN rows for its points
             for pt_idx in pt_indices:

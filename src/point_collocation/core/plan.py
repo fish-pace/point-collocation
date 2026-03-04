@@ -17,23 +17,26 @@ Typical workflow
         df_points,
         data_source="earthaccess",
         source_kwargs={"short_name": "PACE_OCI_L3M_RRS"},
-        variables=["Rrs"],
         time_buffer="0h",
     )
     print(plan.summary())
+    plan.show_variables()
 
-    result = pc.matchup(plan)   # executes the plan; one row per point×granule
+    result = pc.matchup(plan, variables=["Rrs"])   # executes the plan; one row per point×granule
 """
 
 from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from point_collocation.core.types import PointsFrame
+
+if TYPE_CHECKING:
+    import xarray as xr
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -80,7 +83,9 @@ class Plan:
         Maps each row index of *points* to a (possibly empty) list of
         indices into *granules*.
     variables:
-        Variables to extract during :func:`~point_collocation.matchup`.
+        Default variables to extract during :func:`~point_collocation.matchup`.
+        Can be overridden by passing ``variables`` directly to
+        :func:`~point_collocation.matchup`.
     source_kwargs:
         earthaccess search kwargs used to build this plan.
     time_buffer:
@@ -91,9 +96,144 @@ class Plan:
     results: list[Any]
     granules: list[GranuleMeta]
     point_granule_map: dict[Any, list[int]]
-    variables: list[str]
-    source_kwargs: dict[str, Any]
-    time_buffer: pd.Timedelta
+    variables: list[str] = field(default_factory=list)
+    source_kwargs: dict[str, Any] = field(default_factory=dict)
+    time_buffer: pd.Timedelta = field(default_factory=lambda: pd.Timedelta(0))
+
+    # ------------------------------------------------------------------
+    # Indexing — plan[0] or plan[0:2] returns result objects
+    # ------------------------------------------------------------------
+
+    def __getitem__(self, idx: int | slice) -> Any:
+        """Return earthaccess result object(s) at *idx*.
+
+        Supports integer and slice indexing so that ``plan[0]`` and
+        ``plan[0:2]`` can be passed to :meth:`open_dataset` and
+        :meth:`open_mfdataset` respectively.
+        """
+        return self.results[idx]
+
+    # ------------------------------------------------------------------
+    # Dataset opening helpers
+    # ------------------------------------------------------------------
+
+    def open_dataset(
+        self,
+        result: Any,
+        open_dataset_kwargs: dict[str, Any] | None = None,
+    ) -> "xr.Dataset":
+        """Open a single granule result as an :class:`xarray.Dataset`.
+
+        Parameters
+        ----------
+        result:
+            A single earthaccess result object, typically obtained via
+            ``plan[n]``.
+        open_dataset_kwargs:
+            Keyword arguments forwarded to ``xarray.open_dataset``.
+            Defaults to ``{"chunks": {}}`` (lazy/dask loading).
+            ``engine`` defaults to ``"h5netcdf"`` when not specified.
+
+        Returns
+        -------
+        xarray.Dataset
+        """
+        try:
+            import earthaccess  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise ImportError(
+                "The 'earthaccess' package is required. "
+                "Install it with: pip install earthaccess"
+            ) from exc
+
+        import xarray as xr
+
+        kwargs = {"chunks": {}} if open_dataset_kwargs is None else dict(open_dataset_kwargs)
+        if "engine" not in kwargs:
+            kwargs["engine"] = "h5netcdf"
+
+        file_objs = earthaccess.open([result], pqdm_kwargs={"disable": True})
+        if len(file_objs) != 1:
+            raise RuntimeError(
+                f"Expected 1 file object from earthaccess.open, got {len(file_objs)}."
+            )
+        return xr.open_dataset(file_objs[0], **kwargs)  # type: ignore[arg-type]
+
+    def open_mfdataset(
+        self,
+        results: list[Any],
+        open_dataset_kwargs: dict[str, Any] | None = None,
+    ) -> "xr.Dataset":
+        """Open multiple granule results as a single :class:`xarray.Dataset`.
+
+        Parameters
+        ----------
+        results:
+            A list of earthaccess result objects, typically obtained via
+            ``plan[start:stop]``.
+        open_dataset_kwargs:
+            Keyword arguments forwarded to ``xarray.open_mfdataset``.
+            Defaults to ``{"chunks": {}}`` (lazy/dask loading).
+            ``engine`` defaults to ``"h5netcdf"`` when not specified.
+
+        Returns
+        -------
+        xarray.Dataset
+        """
+        try:
+            import earthaccess  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise ImportError(
+                "The 'earthaccess' package is required. "
+                "Install it with: pip install earthaccess"
+            ) from exc
+
+        import xarray as xr
+
+        kwargs = {"chunks": {}} if open_dataset_kwargs is None else dict(open_dataset_kwargs)
+        if "engine" not in kwargs:
+            kwargs["engine"] = "h5netcdf"
+
+        file_objs = earthaccess.open(list(results), pqdm_kwargs={"disable": True})
+        return xr.open_mfdataset(file_objs, **kwargs)  # type: ignore[arg-type]
+
+    # ------------------------------------------------------------------
+    # Variable inspection
+    # ------------------------------------------------------------------
+
+    def show_variables(
+        self,
+        open_dataset_kwargs: dict[str, Any] | None = None,
+    ) -> None:
+        """Open the first granule and print its dimensions and variables.
+
+        Uses :meth:`open_dataset` to load the first result in the plan,
+        then prints the dataset dimensions and data variable names.  This
+        lets users discover available variable names before running a full
+        :func:`~point_collocation.matchup`.
+
+        Parameters
+        ----------
+        open_dataset_kwargs:
+            Keyword arguments forwarded to ``xarray.open_dataset`` when
+            opening the first granule.  Passed unchanged to
+            :meth:`open_dataset`.
+
+        Raises
+        ------
+        ValueError
+            If the plan contains no granules.
+        """
+        if not self.results:
+            raise ValueError("No granules in plan — cannot show variables.")
+
+        with self.open_dataset(self.results[0], open_dataset_kwargs=open_dataset_kwargs) as ds:
+            print(f"Dimensions : {dict(ds.sizes)}")
+            print(f"Variables  : {list(ds.data_vars)}")
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
 
     def summary(self, n: int = 50) -> str:
         """Return a human-readable summary of the plan.
@@ -144,7 +284,7 @@ def plan(
     *,
     data_source: str = "earthaccess",
     source_kwargs: dict[str, Any] | None = None,
-    variables: list[str],
+    variables: list[str] | None = None,
     time_buffer: str | pd.Timedelta | datetime.timedelta | int = "0h",
 ) -> Plan:
     """Build a :class:`Plan` previewing which granules cover each point.
@@ -163,8 +303,12 @@ def plan(
         Keyword arguments forwarded to ``earthaccess.search_data()``.
         Must contain at least ``"short_name"``.
     variables:
-        Variable names to extract when :func:`~point_collocation.matchup`
-        executes this plan.
+        Default variable names to extract when
+        :func:`~point_collocation.matchup` executes this plan.
+        Can be overridden by passing ``variables`` to
+        :func:`~point_collocation.matchup` directly.
+        If omitted, defaults to an empty list; variables must then be
+        supplied to :func:`~point_collocation.matchup`.
     time_buffer:
         Extra temporal margin when matching a point to a granule.  A
         point at time *t* matches a granule whose coverage is
@@ -205,7 +349,7 @@ def plan(
         results=results,
         granules=granule_metas,
         point_granule_map=point_granule_map,
-        variables=list(variables),
+        variables=list(variables) if variables is not None else [],
         source_kwargs=dict(source_kwargs or {}),
         time_buffer=buffer,
     )

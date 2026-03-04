@@ -30,9 +30,15 @@ Quick start
             "short_name": "PACE_OCI_L3M_RRS",
             "granule_name": "*.DAY.*.4km.*",
         },
-        variables=["Rrs"],
     )
-    out = pc.matchup(plan)
+
+    # Inspect what variables are available before running the full matchup
+    plan.show_variables()
+
+    # Open a single granule interactively
+    ds = plan.open_dataset(plan[0])
+
+    out = pc.matchup(plan, variables=["Rrs"])
 
 Optional xarray accessor
 -------------------------
