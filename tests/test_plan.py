@@ -996,9 +996,9 @@ class TestMatchupWithPlan:
             time_buffer=pd.Timedelta(0),
         )
 
-        # This is the key test: passing open_dataset_kwargs as a dict must not break
-        # 3D variable expansion.
-        result = pc.matchup(p, open_dataset_kwargs={"engine": "netcdf4"})
+        # This is the key test: passing open_dataset_kwargs with chunks={} (the original
+        # bug report scenario) must not break 3D variable expansion.
+        result = pc.matchup(p, open_dataset_kwargs={"chunks": {}, "engine": "netcdf4"})
         assert "Rrs" not in result.columns, "bare 'Rrs' column should be dropped after expansion"
         for wl in wavelengths:
             assert f"Rrs_{wl}" in result.columns, f"Rrs_{wl} column missing"
