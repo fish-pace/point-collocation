@@ -284,7 +284,6 @@ def plan(
     *,
     data_source: str = "earthaccess",
     source_kwargs: dict[str, Any] | None = None,
-    variables: list[str] | None = None,
     time_buffer: str | pd.Timedelta | datetime.timedelta | int = "0h",
 ) -> Plan:
     """Build a :class:`Plan` previewing which granules cover each point.
@@ -302,13 +301,6 @@ def plan(
     source_kwargs:
         Keyword arguments forwarded to ``earthaccess.search_data()``.
         Must contain at least ``"short_name"``.
-    variables:
-        Default variable names to extract when
-        :func:`~point_collocation.matchup` executes this plan.
-        Can be overridden by passing ``variables`` to
-        :func:`~point_collocation.matchup` directly.
-        If omitted, defaults to an empty list; variables must then be
-        supplied to :func:`~point_collocation.matchup`.
     time_buffer:
         Extra temporal margin when matching a point to a granule.  A
         point at time *t* matches a granule whose coverage is
@@ -349,7 +341,6 @@ def plan(
         results=results,
         granules=granule_metas,
         point_granule_map=point_granule_map,
-        variables=list(variables) if variables is not None else [],
         source_kwargs=dict(source_kwargs or {}),
         time_buffer=buffer,
     )

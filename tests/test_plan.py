@@ -392,7 +392,7 @@ class TestPlanPublicApi:
         pts = pd.DataFrame(
             {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
         )
-        result = plan(pts, source_kwargs={"short_name": "TEST"}, variables=["sst"])
+        result = plan(pts, source_kwargs={"short_name": "TEST"})
         assert isinstance(result, Plan)
 
     def test_plan_raises_on_unknown_data_source(self) -> None:
@@ -400,12 +400,12 @@ class TestPlanPublicApi:
             {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
         )
         with pytest.raises(ValueError, match="Unknown data_source"):
-            plan(pts, data_source="stac", source_kwargs={}, variables=["sst"])
+            plan(pts, data_source="stac", source_kwargs={})
 
     def test_plan_raises_when_neither_time_nor_date(self) -> None:
         pts = pd.DataFrame({"lat": [0.0], "lon": [0.0], "x": [1]})
         with pytest.raises(ValueError, match="time"):
-            plan(pts, source_kwargs={"short_name": "TEST"}, variables=["sst"])
+            plan(pts, source_kwargs={"short_name": "TEST"})
 
     def test_plan_raises_without_short_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_ea = MagicMock()
@@ -414,7 +414,7 @@ class TestPlanPublicApi:
             {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
         )
         with pytest.raises(ValueError, match="short_name"):
-            plan(pts, source_kwargs={}, variables=["sst"])
+            plan(pts, source_kwargs={})
 
 
 class TestPlanMapping:
@@ -425,7 +425,6 @@ class TestPlanMapping:
         monkeypatch: pytest.MonkeyPatch,
         points: pd.DataFrame,
         fake_results: list[dict],
-        variables: list[str] | None = None,
         time_buffer: str = "0h",
     ) -> Plan:
         """Helper: run pc.plan() with mocked earthaccess.search_data."""
@@ -435,7 +434,6 @@ class TestPlanMapping:
         return plan(
             points,
             source_kwargs={"short_name": "TEST"},
-            variables=variables or ["sst"],
             time_buffer=time_buffer,
         )
 
@@ -537,16 +535,6 @@ class TestPlanMapping:
         p = self._run_plan(monkeypatch, pts, results)
         assert p.point_granule_map[0] == [0]
 
-    def test_plan_stores_variables(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_ea = MagicMock()
-        mock_ea.search_data.return_value = []
-        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
-        pts = pd.DataFrame(
-            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
-        )
-        p = plan(pts, source_kwargs={"short_name": "TEST"}, variables=["Rrs", "sst"])
-        assert p.variables == ["Rrs", "sst"]
-
     def test_plan_stores_results(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_results = [_make_global_result("2023-06-01T00:00:00Z", "2023-06-01T23:59:59Z")]
         mock_ea = MagicMock()
@@ -555,7 +543,7 @@ class TestPlanMapping:
         pts = pd.DataFrame(
             {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
         )
-        p = plan(pts, source_kwargs={"short_name": "TEST"}, variables=["sst"])
+        p = plan(pts, source_kwargs={"short_name": "TEST"})
         assert p.results is fake_results or p.results == fake_results
 
 
@@ -1053,13 +1041,13 @@ class TestMatchupWithPlan:
 
 
 # ---------------------------------------------------------------------------
-# Task 1: variables is now optional in plan()
+# Task 1: variables removed from plan()
 # ---------------------------------------------------------------------------
 
-class TestPlanVariablesOptional:
-    """variables is no longer required in pc.plan()."""
+class TestPlanNoVariables:
+    """pc.plan() does not accept a variables argument."""
 
-    def test_plan_without_variables_uses_empty_list(
+    def test_plan_variables_field_is_empty_list(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mock_ea = MagicMock()
@@ -1071,7 +1059,7 @@ class TestPlanVariablesOptional:
         p = plan(pts, source_kwargs={"short_name": "TEST"})
         assert p.variables == []
 
-    def test_plan_with_variables_still_works(
+    def test_plan_does_not_accept_variables_kwarg(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mock_ea = MagicMock()
@@ -1080,8 +1068,8 @@ class TestPlanVariablesOptional:
         pts = pd.DataFrame(
             {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
         )
-        p = plan(pts, source_kwargs={"short_name": "TEST"}, variables=["sst", "chlor_a"])
-        assert p.variables == ["sst", "chlor_a"]
+        with pytest.raises(TypeError):
+            plan(pts, source_kwargs={"short_name": "TEST"}, variables=["sst"])  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
