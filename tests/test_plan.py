@@ -1004,3 +1004,50 @@ class TestMatchupWithPlan:
             assert f"Rrs_{wl}" in result.columns, f"Rrs_{wl} column missing"
         assert len(result) == 1
 
+    def test_matchup_2d_variable_with_chunks(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2D variable (lat, lon) must return a value—not NaN—when chunks={} is used.
+
+        Regression test: when open_dataset_kwargs={"chunks": {}} (dask lazy loading)
+        is passed, selected.item() raises NotImplementedError on 0-dimensional dask
+        arrays. The fix uses float(selected) instead, which works for both dask and
+        non-dask arrays.
+        """
+        nc_path = str(tmp_path / "PACE_OCI_2023152.L3m.DAY.AVW.avw.4km.nc")
+        _make_l3_dataset(
+            [-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=7
+        ).to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/avw.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        # This is the regression test: chunks={} must NOT cause 2D variables to return NaN
+        result = pc.matchup(p, open_dataset_kwargs={"chunks": {}, "engine": "netcdf4"})
+        assert len(result) == 1
+        assert "sst" in result.columns
+        assert not math.isnan(result.loc[0, "sst"]), (
+            "2D variable must return a value when chunks={} (dask) is used, not NaN"
+        )
+
