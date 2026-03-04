@@ -42,5 +42,6 @@ Register the ``Dataset.pc`` accessor for interactive use::
 """
 
 from point_collocation.core.engine import matchup
+from point_collocation.core.plan import Plan, plan
 
-__all__ = ["matchup"]
+__all__ = ["matchup", "plan", "Plan"]

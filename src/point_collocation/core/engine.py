@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterable
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Union
 
 import pandas as pd
 import xarray as xr
@@ -38,15 +38,18 @@ from point_collocation.core._granule import get_source_id, parse_temporal_range
 from point_collocation.core.types import PointsFrame
 from point_collocation.diagnostics.report import GranuleSummary, MatchupReport
 
+if TYPE_CHECKING:
+    from point_collocation.core.plan import Plan
+
 # Candidate coordinate names tried in order when locating lat/lon dims.
 _LAT_NAMES = ("lat", "latitude", "Latitude", "LAT")
 _LON_NAMES = ("lon", "longitude", "Longitude", "LON")
 
 
 def matchup(
-    points: PointsFrame,
+    points: Union[PointsFrame, "Plan"],
     *,
-    variables: list[str],
+    variables: list[str] | None = None,
     data_source: str = "earthaccess",
     source_kwargs: dict | None = None,
     nc_type: Literal["grouped", "flat"] = "flat",
@@ -58,12 +61,20 @@ def matchup(
     Parameters
     ----------
     points:
-        ``DataFrame`` with at minimum the columns ``lat``, ``lon``, and
-        ``time`` (or ``date`` as an alias for ``time``).  Additional
-        columns are preserved in the output.  Results are returned in the
-        same row order as *points*.
+        Either a ``DataFrame`` with at minimum the columns ``lat``,
+        ``lon``, and ``time`` (or ``date`` as an alias for ``time``), **or**
+        a :class:`~point_collocation.core.plan.Plan` object previously
+        built with :func:`~point_collocation.plan`.
+
+        When a :class:`~point_collocation.core.plan.Plan` is supplied the
+        *data_source*, *source_kwargs*, and *variables* parameters are
+        ignored and taken from the plan instead.  One output row is
+        produced per (point, granule) pair; points with zero matching
+        granules produce a single NaN row.
     variables:
         Names of the dataset variables to extract at each point.
+        Required when *points* is a ``DataFrame``; ignored (taken from
+        the plan) when *points* is a :class:`~point_collocation.core.plan.Plan`.
     data_source:
         Data source to use for locating files.  Defaults to
         ``"earthaccess"``, which searches NASA Earthdata via
@@ -86,7 +97,8 @@ def matchup(
         Currently only ``"flat"`` is supported.
     return_diagnostics:
         When ``True``, return ``(DataFrame, MatchupReport)`` instead of
-        just the ``DataFrame``.
+        just the ``DataFrame``.  Not supported when *points* is a
+        :class:`~point_collocation.core.plan.Plan`.
     **open_dataset_kwargs:
         Extra keyword arguments forwarded to ``xarray.open_dataset`` for
         every source opened during the run.  Defaults to
@@ -95,18 +107,43 @@ def matchup(
     Returns
     -------
     pandas.DataFrame
-        Original ``points`` columns plus one new column per variable in
-        ``variables``.  Rows that could not be matched are preserved with
-        ``NaN`` in the new columns.  Row order matches the input.
+        When *points* is a ``DataFrame``: original ``points`` columns
+        plus one new column per variable in ``variables``.  Rows that
+        could not be matched are preserved with ``NaN`` in the new columns.
+        Row order matches the input.
+
+        When *points* is a :class:`~point_collocation.core.plan.Plan`:
+        one row per (point, granule) pair, including ``granule_id`` and
+        variable columns.  Points with 0 matching granules contribute a
+        single NaN row.
     MatchupReport
-        Only returned when ``return_diagnostics=True``.
+        Only returned when ``return_diagnostics=True`` (DataFrame path only).
 
     Raises
     ------
     ValueError
         If ``points`` is missing required columns (``lat``, ``lon``,
-        ``time``/``date``), or if *data_source* is not recognised.
+        ``time``/``date``), or if *data_source* is not recognised, or if
+        ``variables`` is ``None`` when ``points`` is a DataFrame.
     """
+    # ----------------------------------------------------------------
+    # Plan-based execution path
+    # ----------------------------------------------------------------
+    from point_collocation.core.plan import Plan as _Plan  # avoid circular import at module level
+
+    if isinstance(points, _Plan):
+        effective_vars = variables if variables is not None else points.variables
+        return _execute_plan(points, variables=effective_vars, **open_dataset_kwargs)
+
+    # ----------------------------------------------------------------
+    # DataFrame-based execution path (existing behaviour)
+    # ----------------------------------------------------------------
+    if variables is None:
+        raise ValueError(
+            "'variables' is required when 'points' is a DataFrame. "
+            "Pass a list of variable names, e.g. variables=['sst']."
+        )
+
     points = _normalise_time_column(points)
     _validate_points(points)
 
@@ -286,6 +323,116 @@ def _resolve_earthaccess_sources(
             opened = earthaccess.open(results)
             all_sources.extend(opened)
     return all_sources
+
+
+def _execute_plan(
+    plan: "Plan",
+    *,
+    variables: list[str],
+    **open_dataset_kwargs: object,
+) -> pd.DataFrame:
+    """Execute a :class:`~point_collocation.core.plan.Plan`.
+
+    Opens each granule once and extracts variable values for all points
+    mapped to it.  Returns one row per (point, granule) pair; points
+    with zero granule matches get a single NaN row.
+    """
+    try:
+        import earthaccess  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(
+            "The 'earthaccess' package is required to execute a Plan. "
+            "Install it with: pip install earthaccess"
+        ) from exc
+
+    opened_files: list[object] = earthaccess.open(plan.results)
+
+    kwargs = dict(open_dataset_kwargs)
+    if "engine" not in kwargs:
+        kwargs["engine"] = "h5netcdf"
+
+    # Build granule_index → [point_indices] for all matched granules
+    granule_to_points: dict[int, list[object]] = {}
+    zero_match_pt_indices: list[object] = []
+
+    for pt_idx, g_indices in plan.point_granule_map.items():
+        if not g_indices:
+            zero_match_pt_indices.append(pt_idx)
+        else:
+            for g_idx in g_indices:
+                granule_to_points.setdefault(g_idx, []).append(pt_idx)
+
+    output_rows: list[dict] = []
+
+    # Zero-match points → single NaN row each
+    for pt_idx in zero_match_pt_indices:
+        row: dict = plan.points.loc[pt_idx].to_dict()
+        row["granule_id"] = float("nan")
+        for var in variables:
+            row[var] = float("nan")
+        output_rows.append(row)
+
+    # Process granules, opening each file once
+    for g_idx, pt_indices in sorted(granule_to_points.items()):
+        gm = plan.granules[g_idx]
+        file_obj = opened_files[gm.result_index]
+
+        try:
+            with xr.open_dataset(file_obj, **kwargs) as ds:  # type: ignore[arg-type]
+                lat_name = _find_coord(ds, _LAT_NAMES)
+                lon_name = _find_coord(ds, _LON_NAMES)
+
+                for pt_idx in pt_indices:
+                    row = plan.points.loc[pt_idx].to_dict()
+                    row["granule_id"] = gm.granule_id
+
+                    for var in variables:
+                        if var not in ds or lat_name is None or lon_name is None:
+                            row[var] = float("nan")
+                            continue
+                        try:
+                            selected = ds[var].sel(
+                                {lat_name: row["lat"], lon_name: row["lon"]},
+                                method="nearest",
+                            )
+                            if selected.ndim == 0:
+                                row[var] = selected.item()
+                            else:
+                                # Multi-dimensional: expand into coord-keyed entries
+                                row[var] = float("nan")  # placeholder removed later
+                                for coord_val, val in selected.to_series().items():
+                                    row[f"{var}_{int(coord_val)}"] = float(val)
+                        except Exception:
+                            row[var] = float("nan")
+
+                    output_rows.append(row)
+
+        except Exception:
+            # Granule failed to open → emit NaN rows for its points
+            for pt_idx in pt_indices:
+                row = plan.points.loc[pt_idx].to_dict()
+                row["granule_id"] = gm.granule_id
+                for var in variables:
+                    row[var] = float("nan")
+                output_rows.append(row)
+
+    if not output_rows:
+        empty = plan.points.iloc[:0].copy()
+        empty["granule_id"] = pd.Series(dtype=object)
+        for var in variables:
+            empty[var] = pd.Series(dtype=float)
+        return empty
+
+    df = pd.DataFrame(output_rows)
+
+    # Drop bare placeholder columns for any variable that was expanded into
+    # per-coordinate columns (e.g. Rrs → Rrs_412, Rrs_443, …).
+    for var in variables:
+        expanded = [c for c in df.columns if c.startswith(f"{var}_")]
+        if expanded and var in df.columns:
+            df = df.drop(columns=[var])
+
+    return df
 
 
 def _find_coord(ds: xr.Dataset, candidates: tuple[str, ...]) -> str | None:
