@@ -320,7 +320,7 @@ def _resolve_earthaccess_sources(
         search_kwargs = {**base_kwargs, "temporal": (date_str, date_str)}
         results = earthaccess.search_data(**search_kwargs)
         if results:
-            opened = earthaccess.open(results)
+            opened = earthaccess.open(results, pqdm_kwargs={"disable": True})
             all_sources.extend(opened)
     return all_sources
 
@@ -345,7 +345,7 @@ def _execute_plan(
             "Install it with: pip install earthaccess"
         ) from exc
 
-    opened_files: list[object] = earthaccess.open(plan.results)
+    opened_files: list[object] = earthaccess.open(plan.results, pqdm_kwargs={"disable": True})
 
     kwargs = dict(open_dataset_kwargs)
     if "engine" not in kwargs:
