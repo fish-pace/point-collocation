@@ -55,12 +55,8 @@ class TestMatchupSignature:
 
     def test_accepts_open_dataset_kwargs(self) -> None:
         sig = inspect.signature(matchup)
-        # **open_dataset_kwargs must be present (VAR_KEYWORD kind)
-        var_keyword_params = [
-            p for p in sig.parameters.values()
-            if p.kind == inspect.Parameter.VAR_KEYWORD
-        ]
-        assert var_keyword_params, "matchup() must accept **open_dataset_kwargs"
+        params = sig.parameters
+        assert "open_dataset_kwargs" in params, "matchup() must accept open_dataset_kwargs"
 
     def test_no_dataframe_parameters(self) -> None:
         sig = inspect.signature(matchup)

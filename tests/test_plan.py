@@ -721,7 +721,7 @@ class TestMatchupWithPlan:
             time_buffer=pd.Timedelta(0),
         )
 
-        pc.matchup(p, engine="netcdf4")
+        pc.matchup(p, open_dataset_kwargs={"engine": "netcdf4"})
         mock_ea.search_data.assert_not_called()
 
     def test_matchup_with_plan_calls_open(
@@ -756,7 +756,7 @@ class TestMatchupWithPlan:
             time_buffer=pd.Timedelta(0),
         )
 
-        pc.matchup(p, engine="netcdf4")
+        pc.matchup(p, open_dataset_kwargs={"engine": "netcdf4"})
         mock_ea.open.assert_called_once_with(fake_results, pqdm_kwargs={"disable": True})
 
     def test_matchup_plan_zero_match_returns_nan_row(
@@ -780,7 +780,7 @@ class TestMatchupWithPlan:
             time_buffer=pd.Timedelta(0),
         )
 
-        result = pc.matchup(p, engine="netcdf4")
+        result = pc.matchup(p, open_dataset_kwargs={"engine": "netcdf4"})
         assert len(result) == 1
         assert math.isnan(result.loc[0, "sst"])
         assert "granule_id" in result.columns
@@ -816,7 +816,7 @@ class TestMatchupWithPlan:
             time_buffer=pd.Timedelta(0),
         )
 
-        result = pc.matchup(p, engine="netcdf4")
+        result = pc.matchup(p, open_dataset_kwargs={"engine": "netcdf4"})
         assert len(result) == 1
         assert not math.isnan(result.loc[0, "sst"])
         assert result.loc[0, "granule_id"] == "https://example.com/g.nc"
@@ -861,7 +861,7 @@ class TestMatchupWithPlan:
             time_buffer=pd.Timedelta(0),
         )
 
-        result = pc.matchup(p, engine="netcdf4")
+        result = pc.matchup(p, open_dataset_kwargs={"engine": "netcdf4"})
         assert len(result) == 2, "One row per (point, granule) pair"
         assert set(result["granule_id"]) == {
             "https://example.com/a.nc",
@@ -956,7 +956,7 @@ class TestMatchupWithPlan:
             time_buffer=pd.Timedelta(0),
         )
 
-        result = pc.matchup(p, engine="netcdf4")
+        result = pc.matchup(p, open_dataset_kwargs={"engine": "netcdf4"})
         assert "Rrs" not in result.columns, "bare 'Rrs' column should be dropped after expansion"
         for wl in wavelengths:
             assert f"Rrs_{wl}" in result.columns, f"Rrs_{wl} column missing"
