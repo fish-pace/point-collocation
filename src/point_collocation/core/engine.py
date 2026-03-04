@@ -144,7 +144,7 @@ def _execute_plan(
                                 method="nearest",
                             )
                             if selected.ndim == 0:
-                                row[var] = selected.item()
+                                row[var] = float(selected)
                             else:
                                 # Multi-dimensional: expand into coord-keyed entries
                                 row[var] = float("nan")  # placeholder removed later
