@@ -101,17 +101,77 @@ class Plan:
     time_buffer: pd.Timedelta = field(default_factory=lambda: pd.Timedelta(0))
 
     # ------------------------------------------------------------------
-    # Indexing — plan[0] or plan[0:2] returns result objects
+    # Indexing — plan[0] returns a result object; plan[0:10] returns a
+    # subset Plan restricted to the sliced points.
     # ------------------------------------------------------------------
 
-    def __getitem__(self, idx: int | slice) -> Any:
-        """Return earthaccess result object(s) at *idx*.
+    def __getitem__(self, idx: int | slice) -> "Plan | Any":
+        """Return a subset :class:`Plan` or a single earthaccess result.
 
-        Supports integer and slice indexing so that ``plan[0]`` and
-        ``plan[0:2]`` can be passed to :meth:`open_dataset` and
-        :meth:`open_mfdataset` respectively.
+        Parameters
+        ----------
+        idx:
+            * **Integer** — returns the earthaccess result object at that
+              position (``self.results[idx]``), so that ``plan[0]`` can
+              still be passed to :meth:`open_dataset`.
+            * **Slice** — returns a new :class:`Plan` whose ``points``
+              are the rows selected by the slice (``points.iloc[idx]``),
+              with ``point_granule_map``, ``granules``, and ``results``
+              filtered and re-indexed accordingly.  This allows users to
+              test a subset of a large plan::
+
+                  res = pc.matchup(plan[0:10], variables=["avw"])
         """
-        return self.results[idx]
+        if isinstance(idx, int):
+            return self.results[idx]
+
+        # --- Slice: subset by points ---
+        subset_points = self.points.iloc[idx]
+        subset_pt_indices = list(subset_points.index)
+
+        # Collect granule indices (into self.granules) needed by the subset.
+        needed_g_idx: list[int] = []
+        seen_g: set[int] = set()
+        for pt_idx in subset_pt_indices:
+            for g_idx in self.point_granule_map.get(pt_idx, []):
+                if g_idx not in seen_g:
+                    needed_g_idx.append(g_idx)
+                    seen_g.add(g_idx)
+        needed_g_idx.sort()
+
+        # Build re-index map: old granule index → new granule index.
+        g_remap: dict[int, int] = {old: new for new, old in enumerate(needed_g_idx)}
+
+        # New granules with corrected result_index (sequential from 0).
+        new_granules = [
+            GranuleMeta(
+                granule_id=self.granules[old_g].granule_id,
+                begin=self.granules[old_g].begin,
+                end=self.granules[old_g].end,
+                bbox=self.granules[old_g].bbox,
+                result_index=new_g,
+            )
+            for new_g, old_g in enumerate(needed_g_idx)
+        ]
+
+        # New results list — only the results referenced by kept granules.
+        new_results = [self.results[self.granules[old_g].result_index] for old_g in needed_g_idx]
+
+        # New point_granule_map using re-indexed granule indices.
+        new_pgm: dict[Any, list[int]] = {
+            pt_idx: [g_remap[g] for g in self.point_granule_map.get(pt_idx, [])]
+            for pt_idx in subset_pt_indices
+        }
+
+        return Plan(
+            points=subset_points,
+            results=new_results,
+            granules=new_granules,
+            point_granule_map=new_pgm,
+            variables=list(self.variables),
+            source_kwargs=dict(self.source_kwargs),
+            time_buffer=self.time_buffer,
+        )
 
     # ------------------------------------------------------------------
     # Dataset opening helpers
@@ -161,7 +221,7 @@ class Plan:
 
     def open_mfdataset(
         self,
-        results: list[Any],
+        results: "list[Any] | Plan",
         open_dataset_kwargs: dict[str, Any] | None = None,
     ) -> "xr.Dataset":
         """Open multiple granule results as a single :class:`xarray.Dataset`.
@@ -169,8 +229,9 @@ class Plan:
         Parameters
         ----------
         results:
-            A list of earthaccess result objects, typically obtained via
-            ``plan[start:stop]``.
+            A list of earthaccess result objects, or a :class:`Plan`
+            (e.g. ``plan[0:2]``).  When a :class:`Plan` is passed its
+            ``results`` attribute is used.
         open_dataset_kwargs:
             Keyword arguments forwarded to ``xarray.open_mfdataset``.
             Defaults to ``{"chunks": {}}`` (lazy/dask loading).
@@ -194,7 +255,8 @@ class Plan:
         if "engine" not in kwargs:
             kwargs["engine"] = "h5netcdf"
 
-        file_objs = earthaccess.open(list(results), pqdm_kwargs={"disable": True})
+        result_list = results.results if isinstance(results, Plan) else list(results)
+        file_objs = earthaccess.open(result_list, pqdm_kwargs={"disable": True})
         return xr.open_mfdataset(file_objs, **kwargs)  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------

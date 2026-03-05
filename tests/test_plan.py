@@ -1139,29 +1139,110 @@ class TestPlanNoVariables:
 # ---------------------------------------------------------------------------
 
 class TestPlanGetItem:
-    def _make_plan(self, n_results: int = 3) -> Plan:
+    def _make_plan_with_points(self, n_points: int = 3) -> Plan:
+        """Build a plan with *n_points* rows, each matched to its own granule."""
         pts = pd.DataFrame(
-            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+            {
+                "lat": [float(i) for i in range(n_points)],
+                "lon": [float(i) for i in range(n_points)],
+                "time": pd.date_range("2023-06-01", periods=n_points, freq="D"),
+            }
         )
-        fake_results = [object() for _ in range(n_results)]
+        fake_results = [object() for _ in range(n_points)]
+        granules = [
+            GranuleMeta(
+                granule_id=f"https://example.com/g{i}.nc",
+                begin=pd.Timestamp(f"2023-06-0{i+1}T00:00:00Z"),
+                end=pd.Timestamp(f"2023-06-0{i+1}T23:59:59Z"),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=i,
+            )
+            for i in range(n_points)
+        ]
+        point_granule_map = {i: [i] for i in range(n_points)}
         return Plan(
             points=pts,
             results=fake_results,
-            granules=[],
-            point_granule_map={0: []},
+            granules=granules,
+            point_granule_map=point_granule_map,
             source_kwargs={"short_name": "TEST"},
             time_buffer=pd.Timedelta(0),
         )
 
     def test_integer_index(self) -> None:
-        p = self._make_plan(3)
+        """Integer index returns the earthaccess result object at that position."""
+        p = self._make_plan_with_points(3)
         assert p[0] is p.results[0]
         assert p[2] is p.results[2]
 
-    def test_slice_index(self) -> None:
-        p = self._make_plan(3)
-        sliced = p[0:2]
-        assert sliced == p.results[0:2]
+    def test_slice_returns_plan(self) -> None:
+        """Slice index returns a subset Plan (not a list of results)."""
+        p = self._make_plan_with_points(5)
+        subset = p[0:3]
+        assert isinstance(subset, Plan)
+
+    def test_slice_subset_points(self) -> None:
+        """Sliced Plan contains only the selected point rows."""
+        p = self._make_plan_with_points(5)
+        subset = p[1:4]
+        assert len(subset.points) == 3
+        pd.testing.assert_frame_equal(subset.points, p.points.iloc[1:4])
+
+    def test_slice_subset_granules_and_results(self) -> None:
+        """Sliced Plan contains only granules/results needed by the kept points."""
+        p = self._make_plan_with_points(5)
+        # Points 0-2 map to granules 0-2 respectively
+        subset = p[0:3]
+        assert len(subset.granules) == 3
+        assert len(subset.results) == 3
+        assert subset.results[0] is p.results[0]
+        assert subset.results[2] is p.results[2]
+
+    def test_slice_reindexes_granule_result_index(self) -> None:
+        """Granule result_index values in the sliced Plan start from 0."""
+        p = self._make_plan_with_points(5)
+        subset = p[2:5]
+        for new_g_idx, gm in enumerate(subset.granules):
+            assert gm.result_index == new_g_idx
+
+    def test_slice_point_granule_map_remapped(self) -> None:
+        """point_granule_map in the sliced Plan uses new granule indices."""
+        p = self._make_plan_with_points(5)
+        subset = p[2:5]
+        # All mapped granule indices must be valid indices into subset.granules
+        all_g_indices = [g for g_list in subset.point_granule_map.values() for g in g_list]
+        assert all(0 <= g < len(subset.granules) for g in all_g_indices)
+
+    def test_slice_zero_match_points_preserved(self) -> None:
+        """Points with no granule matches are still included in the slice."""
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, 1.0, 2.0],
+                "lon": [0.0, 1.0, 2.0],
+                "time": pd.date_range("2023-06-01", periods=3, freq="D"),
+            }
+        )
+        p = Plan(
+            points=pts,
+            results=[],
+            granules=[],
+            point_granule_map={0: [], 1: [], 2: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        subset = p[0:2]
+        assert isinstance(subset, Plan)
+        assert len(subset.points) == 2
+        assert len(subset.granules) == 0
+
+    def test_slice_preserves_variables_and_metadata(self) -> None:
+        """Sliced Plan inherits variables, source_kwargs, and time_buffer."""
+        p = self._make_plan_with_points(3)
+        p.variables = ["avw"]
+        subset = p[0:2]
+        assert subset.variables == ["avw"]
+        assert subset.source_kwargs == p.source_kwargs
+        assert subset.time_buffer == p.time_buffer
 
 
 class TestPlanOpenDataset:
@@ -1226,7 +1307,70 @@ class TestPlanOpenDataset:
         # Patch xr.open_mfdataset to avoid the real coordinate-combination logic
         fake_ds = xr.Dataset({"sst": (["lat", "lon"], [[1.0]])}, coords={"lat": [0.0], "lon": [0.0]})
         with patch("xarray.open_mfdataset", return_value=fake_ds) as mock_mfdataset:
-            ds = p.open_mfdataset(p[0:2], open_dataset_kwargs={"engine": "netcdf4"})
+            # Pass a list of results directly (backward-compatible path)
+            ds = p.open_mfdataset(fake_results, open_dataset_kwargs={"engine": "netcdf4"})
+
+        assert ds is fake_ds
+        mock_ea.open.assert_called_once_with(fake_results, pqdm_kwargs={"disable": True})
+        mock_mfdataset.assert_called_once_with([nc_a, nc_b], engine="netcdf4")
+
+    def test_open_mfdataset_accepts_subset_plan(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_mfdataset accepts a subset Plan and uses its results."""
+        nc_a = str(tmp_path / "a.nc")
+        nc_b = str(tmp_path / "b.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=1).to_netcdf(
+            nc_a, engine="netcdf4"
+        )
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=2).to_netcdf(
+            nc_b, engine="netcdf4"
+        )
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_a, nc_b]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        # Build a two-point plan, each point matched to its own granule.
+        fake_results = [object(), object()]
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, 1.0],
+                "lon": [0.0, 1.0],
+                "time": pd.to_datetime(["2023-06-01", "2023-06-02"]),
+            }
+        )
+        granules = [
+            GranuleMeta(
+                granule_id="https://example.com/a.nc",
+                begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+                end=pd.Timestamp("2023-06-01T23:59:59Z"),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=0,
+            ),
+            GranuleMeta(
+                granule_id="https://example.com/b.nc",
+                begin=pd.Timestamp("2023-06-02T00:00:00Z"),
+                end=pd.Timestamp("2023-06-02T23:59:59Z"),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=1,
+            ),
+        ]
+        p = Plan(
+            points=pts,
+            results=fake_results,
+            granules=granules,
+            point_granule_map={0: [0], 1: [1]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        # plan[0:2] is now a subset Plan; open_mfdataset should use its results.
+        subset = p[0:2]
+        assert isinstance(subset, Plan)
+
+        fake_ds = xr.Dataset({"sst": (["lat", "lon"], [[1.0]])}, coords={"lat": [0.0], "lon": [0.0]})
+        with patch("xarray.open_mfdataset", return_value=fake_ds) as mock_mfdataset:
+            ds = p.open_mfdataset(subset, open_dataset_kwargs={"engine": "netcdf4"})
 
         assert ds is fake_ds
         mock_ea.open.assert_called_once_with(fake_results, pqdm_kwargs={"disable": True})
@@ -1400,3 +1544,115 @@ class TestMatchupVariablesKwarg:
         assert "sst" in result.columns
         assert len(result) == 1
         assert not math.isnan(result.loc[0, "sst"])
+
+
+# ---------------------------------------------------------------------------
+# Plan subsetting: pc.matchup(plan[0:n])
+# ---------------------------------------------------------------------------
+
+class TestMatchupWithSubsetPlan:
+    """Tests that pc.matchup(plan[0:n]) processes only the subset of points."""
+
+    def _build_multi_point_plan(
+        self,
+        tmp_path: pathlib.Path,
+        n_points: int,
+    ) -> tuple[Plan, list[str]]:
+        """Build a plan with *n_points*, each matched to its own granule."""
+        nc_files: list[str] = []
+        granules: list[GranuleMeta] = []
+        for i in range(n_points):
+            nc_path = str(tmp_path / f"granule_{i}.nc")
+            _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=i).to_netcdf(
+                nc_path, engine="netcdf4"
+            )
+            nc_files.append(nc_path)
+            granules.append(
+                GranuleMeta(
+                    granule_id=f"https://example.com/g{i}.nc",
+                    begin=pd.Timestamp(f"2023-06-{i+1:02d}T00:00:00Z"),
+                    end=pd.Timestamp(f"2023-06-{i+1:02d}T23:59:59Z"),
+                    bbox=(-180.0, -90.0, 180.0, 90.0),
+                    result_index=i,
+                )
+            )
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0] * n_points,
+                "lon": [0.0] * n_points,
+                "time": pd.to_datetime(
+                    [f"2023-06-{i+1:02d}T12:00:00" for i in range(n_points)]
+                ),
+            }
+        )
+        results = [object() for _ in range(n_points)]
+        point_granule_map = {i: [i] for i in range(n_points)}
+        p = Plan(
+            points=pts,
+            results=results,
+            granules=granules,
+            point_granule_map=point_granule_map,
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        return p, nc_files
+
+    def test_matchup_with_subset_returns_only_subset_rows(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pc.matchup(plan[0:3]) processes only the first 3 points."""
+        n_points = 5
+        p, nc_files = self._build_multi_point_plan(tmp_path, n_points)
+
+        mock_ea = MagicMock()
+        # The subset plan has 3 points (and 3 granules), so earthaccess.open
+        # will be called with 3 result objects.
+        mock_ea.open.return_value = nc_files[:3]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        subset_plan = p[0:3]
+        assert isinstance(subset_plan, Plan)
+        assert len(subset_plan.points) == 3
+
+        result = pc.matchup(subset_plan, variables=["sst"], open_dataset_kwargs={"engine": "netcdf4"})
+        # One row per (point × granule) — 3 points, 1 granule each
+        assert len(result) == 3
+        assert "sst" in result.columns
+
+    def test_matchup_subset_opens_only_subset_granules(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """earthaccess.open is called with only the granules for the subset."""
+        n_points = 5
+        p, nc_files = self._build_multi_point_plan(tmp_path, n_points)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = nc_files[:2]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        subset_plan = p[0:2]
+        pc.matchup(subset_plan, variables=["sst"], open_dataset_kwargs={"engine": "netcdf4"})
+
+        # Only the 2 results for the first 2 points should have been opened.
+        opened_results = mock_ea.open.call_args[0][0]
+        assert len(opened_results) == 2
+        assert opened_results[0] is p.results[0]
+        assert opened_results[1] is p.results[1]
+
+    def test_matchup_subset_last_n_points(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pc.matchup(plan[2:]) processes only the last n-2 points."""
+        n_points = 4
+        p, nc_files = self._build_multi_point_plan(tmp_path, n_points)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = nc_files[2:]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        subset_plan = p[2:]
+        assert len(subset_plan.points) == 2
+
+        result = pc.matchup(subset_plan, variables=["sst"], open_dataset_kwargs={"engine": "netcdf4"})
+        assert len(result) == 2
