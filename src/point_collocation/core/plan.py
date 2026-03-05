@@ -275,25 +275,31 @@ class Plan:
 
     def show_variables(
         self,
-        layout: str = "dataset",
+        geometry: str,
+        open_method: str | None = None,
         open_dataset_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Open the first granule and print its dimensions and variables.
 
-        Uses :meth:`open_dataset` (or a DataTree for ``layout="datatree-merge"``)
-        to load the first result in the plan, then prints the dataset
-        dimensions, data variable names, and geolocation detection results.
-        This lets users discover available variable names before running a full
-        :func:`~point_collocation.matchup`.
+        Uses :meth:`open_dataset` (or a DataTree for
+        ``open_method="datatree-merge"``) to load the first result in the
+        plan, then prints the dataset dimensions, data variable names, and
+        geolocation detection results.  This lets users discover available
+        variable names before running a full :func:`~point_collocation.matchup`.
 
         Parameters
         ----------
-        layout:
+        geometry:
+            Data geometry type.  Must be ``"grid"`` (L3/gridded, 1-D
+            lat/lon coordinates) or ``"swath"`` (L2/swath, 2-D lat/lon
+            arrays).  This is a required argument — no default is provided.
+        open_method:
             How to open the granule.  ``"dataset"`` uses a plain
             ``xarray.open_dataset`` call.  ``"datatree-merge"`` opens as a
-            DataTree, prints all group paths and their variables, then merges
-            into a flat dataset for geolocation detection.  Defaults to
-            ``"dataset"``.
+            DataTree, merges into a flat dataset, then prints the merged
+            summary followed by group details at the end.  Defaults to
+            ``"dataset"`` when ``geometry="grid"`` and ``"datatree-merge"``
+            when ``geometry="swath"``.
         open_dataset_kwargs:
             Keyword arguments forwarded to ``xarray.open_dataset`` when
             opening the first granule.  Passed unchanged to
@@ -306,10 +312,26 @@ class Plan:
         """
         from point_collocation.core.engine import (
             _GEOLOC_PAIRS,
-            _find_geoloc_pair,
+            _VALID_GEOMETRIES,
+            _VALID_OPEN_METHODS,
             _merge_datatree,
             _open_datatree,
         )
+
+        if geometry not in _VALID_GEOMETRIES:
+            raise ValueError(
+                f"geometry={geometry!r} is not valid. "
+                f"Must be one of {sorted(_VALID_GEOMETRIES)}."
+            )
+
+        if open_method is None:
+            open_method = "dataset" if geometry == "grid" else "datatree-merge"
+
+        if open_method not in _VALID_OPEN_METHODS:
+            raise ValueError(
+                f"open_method={open_method!r} is not valid. "
+                f"Must be one of {sorted(_VALID_OPEN_METHODS)}."
+            )
 
         if not self.results:
             raise ValueError("No granules in plan — cannot show variables.")
@@ -335,14 +357,51 @@ class Plan:
             )
         file_obj = file_objs[0]
 
-        print(f"layout        : {layout!r}")
+        print(f"geometry     : {geometry!r}")
+        print(f"open_method  : {open_method!r}")
 
-        if layout == "datatree-merge":
-            # Open as DataTree and show group structure.
+        if open_method == "datatree-merge":
+            # Open as DataTree and merge for the summary view.
             dt = _open_datatree(file_obj, kwargs)
+            ds_flat = _merge_datatree(dt)
 
-            # Print group paths and their variables.
-            print("\nDataTree groups:")
+            # Print merged summary first.
+            print(f"Dimensions : {dict(ds_flat.sizes)}")
+            print(f"Variables  : {list(ds_flat.data_vars)}")
+        else:
+            ds_flat = xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
+            print(f"Dimensions : {dict(ds_flat.sizes)}")
+            print(f"Variables  : {list(ds_flat.data_vars)}")
+
+        # Geolocation detection results.
+        found_pairs: list[tuple[str, str]] = []
+        for lon_name, lat_name in _GEOLOC_PAIRS:
+            has_lon = lon_name in ds_flat.coords or lon_name in ds_flat.data_vars
+            has_lat = lat_name in ds_flat.coords or lat_name in ds_flat.data_vars
+            if has_lon and has_lat:
+                found_pairs.append((lon_name, lat_name))
+
+        if len(found_pairs) == 0:
+            alt_open_method = "datatree-merge" if open_method == "dataset" else "dataset"
+            alt = f"plan.show_variables(geometry={geometry!r}, open_method={alt_open_method!r})"
+            print(
+                f"\nGeolocation: NONE detected with open_method={open_method!r}. "
+                f"Try {alt}."
+            )
+        elif len(found_pairs) == 1:
+            lon_n, lat_n = found_pairs[0]
+            lon_var = ds_flat.coords[lon_n] if lon_n in ds_flat.coords else ds_flat[lon_n]
+            lat_var = ds_flat.coords[lat_n] if lat_n in ds_flat.coords else ds_flat[lat_n]
+            print(
+                f"\nGeolocation: ({lon_n!r}, {lat_n!r}) — "
+                f"lon dims={tuple(lon_var.dims)}, lat dims={tuple(lat_var.dims)}"
+            )
+        else:
+            print(f"\nGeolocation: ambiguous — detected pairs: {found_pairs}")
+
+        # For datatree-merge, print group details at the end.
+        if open_method == "datatree-merge":
+            print("\nDataTree groups (detail):")
             try:
                 # xarray DataTree API (>= 2024.x).
                 for node in dt.subtree:  # type: ignore[union-attr]
@@ -364,47 +423,6 @@ class Plan:
                         print(f"  {path or '/'}")
                         print(f"    Dimensions : {dims_str}")
                         print(f"    Variables  : {vars_list}")
-
-            # Merge into flat dataset for geolocation detection.
-            ds_flat = _merge_datatree(dt)
-            print("\nMerged dataset:")
-        else:
-            ds_flat = xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
-            print(f"Dimensions : {dict(ds_flat.sizes)}")
-            print(f"Variables  : {list(ds_flat.data_vars)}")
-
-        # Geolocation detection results.
-        found_pairs: list[tuple[str, str]] = []
-        for lon_name, lat_name in _GEOLOC_PAIRS:
-            has_lon = lon_name in ds_flat.coords or lon_name in ds_flat.data_vars
-            has_lat = lat_name in ds_flat.coords or lat_name in ds_flat.data_vars
-            if has_lon and has_lat:
-                found_pairs.append((lon_name, lat_name))
-
-        if layout == "datatree-merge":
-            print(f"  Dimensions : {dict(ds_flat.sizes)}")
-            print(f"  Variables  : {list(ds_flat.data_vars)}")
-
-        if len(found_pairs) == 0:
-            alt = (
-                "plan.show_variables(layout='datatree-merge')"
-                if layout == "dataset"
-                else "plan.show_variables(layout='dataset')"
-            )
-            print(
-                f"\nGeolocation: NONE detected with layout={layout!r}. "
-                f"Try {alt}."
-            )
-        elif len(found_pairs) == 1:
-            lon_n, lat_n = found_pairs[0]
-            lon_var = ds_flat.coords[lon_n] if lon_n in ds_flat.coords else ds_flat[lon_n]
-            lat_var = ds_flat.coords[lat_n] if lat_n in ds_flat.coords else ds_flat[lat_n]
-            print(
-                f"\nGeolocation: ({lon_n!r}, {lat_n!r}) — "
-                f"lon dims={tuple(lon_var.dims)}, lat dims={tuple(lat_var.dims)}"
-            )
-        else:
-            print(f"\nGeolocation: ambiguous — detected pairs: {found_pairs}")
 
     # ------------------------------------------------------------------
     # Summary

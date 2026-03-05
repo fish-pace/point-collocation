@@ -65,7 +65,7 @@ plan = pc.plan(
 )
 
 # Inspect available variables before running the full matchup.
-plan.show_variables(layout="dataset")
+plan.show_variables(geometry="grid")
 
 # ---------------------------------------------------------------------------
 # 3. Run matchup.

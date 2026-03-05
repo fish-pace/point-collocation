@@ -41,7 +41,7 @@ _GEOLOC_PAIRS = [
 ]
 
 _VALID_GEOMETRIES = {"grid", "swath"}
-_VALID_LAYOUTS = {"dataset", "datatree-merge"}
+_VALID_OPEN_METHODS = {"dataset", "datatree-merge"}
 _VALID_SPATIAL_METHODS = {"nearest", "xoak"}
 
 
@@ -50,7 +50,7 @@ def matchup(
     *,
     geometry: str,
     variables: list[str] | None = None,
-    layout: str | None = None,
+    open_method: str | None = None,
     spatial_method: str | None = None,
     open_dataset_kwargs: dict | None = None,
 ) -> pd.DataFrame:
@@ -75,7 +75,7 @@ def matchup(
         empty, the output will have no variable columns.
         Raises :exc:`ValueError` if a requested variable is not found
         in the opened dataset.
-    layout:
+    open_method:
         How granules are opened.  ``"dataset"`` opens each granule with
         ``xarray.open_dataset``; ``"datatree-merge"`` opens with
         DataTree and merges groups into a flat dataset.  Defaults to
@@ -123,15 +123,15 @@ def matchup(
         )
 
     # Apply geometry-based defaults.
-    if layout is None:
-        layout = "dataset" if geometry == "grid" else "datatree-merge"
+    if open_method is None:
+        open_method = "dataset" if geometry == "grid" else "datatree-merge"
     if spatial_method is None:
         spatial_method = "nearest" if geometry == "grid" else "xoak"
 
-    if layout not in _VALID_LAYOUTS:
+    if open_method not in _VALID_OPEN_METHODS:
         raise ValueError(
-            f"layout={layout!r} is not valid. "
-            f"Must be one of {sorted(_VALID_LAYOUTS)}."
+            f"open_method={open_method!r} is not valid. "
+            f"Must be one of {sorted(_VALID_OPEN_METHODS)}."
         )
     if spatial_method not in _VALID_SPATIAL_METHODS:
         raise ValueError(
@@ -154,7 +154,7 @@ def matchup(
     return _execute_plan(
         plan,
         geometry=geometry,
-        layout=layout,
+        open_method=open_method,
         spatial_method=spatial_method,
         variables=effective_vars,
         **effective_kwargs,
@@ -252,17 +252,17 @@ def _check_geometry(
 
 def _open_as_flat_dataset(
     file_obj: object,
-    layout: str,
+    open_method: str,
     kwargs: dict,
 ) -> "xr.Dataset":
     """Open *file_obj* and return a flat :class:`xarray.Dataset`.
 
-    For ``layout="dataset"``, wraps ``xr.open_dataset``.
-    For ``layout="datatree-merge"``, opens as a DataTree (using
+    For ``open_method="dataset"``, wraps ``xr.open_dataset``.
+    For ``open_method="datatree-merge"``, opens as a DataTree (using
     ``xarray.open_datatree`` if available, or the ``datatree`` package)
     and merges all leaves into a single Dataset.
     """
-    if layout == "dataset":
+    if open_method == "dataset":
         return xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
 
     # datatree-merge: open as DataTree and merge groups.
@@ -272,10 +272,15 @@ def _open_as_flat_dataset(
 
 def _open_datatree(file_obj: object, kwargs: dict) -> object:
     """Open *file_obj* as a DataTree using whichever API is available."""
+    # Suppress xarray FutureWarning about timedelta decoding by opting into
+    # the future behaviour (do not decode timedelta-like variables by default).
+    dt_kwargs = dict(kwargs)
+    dt_kwargs.setdefault("decode_timedelta", False)
+
     # Try xarray built-in DataTree (xarray >= 2024.x).
     try:
         open_dt = xr.open_datatree  # type: ignore[attr-defined]
-        return open_dt(file_obj, **kwargs)  # type: ignore[arg-type]
+        return open_dt(file_obj, **dt_kwargs)  # type: ignore[arg-type]
     except AttributeError:
         pass
 
@@ -283,10 +288,10 @@ def _open_datatree(file_obj: object, kwargs: dict) -> object:
     try:
         import datatree  # type: ignore[import-untyped]
 
-        return datatree.open_datatree(file_obj, **kwargs)  # type: ignore[arg-type]
+        return datatree.open_datatree(file_obj, **dt_kwargs)  # type: ignore[arg-type]
     except ImportError as exc:
         raise ImportError(
-            "layout='datatree-merge' requires either xarray >= 2024.x (with "
+            "open_method='datatree-merge' requires either xarray >= 2024.x (with "
             "built-in DataTree support) or the 'datatree' package. "
             "Install it with: pip install datatree"
         ) from exc
@@ -321,7 +326,7 @@ def _execute_plan(
     plan: "Plan",
     *,
     geometry: str,
-    layout: str,
+    open_method: str,
     spatial_method: str,
     variables: list[str],
     **open_dataset_kwargs: object,
@@ -376,7 +381,7 @@ def _execute_plan(
         file_obj = opened_files[gm.result_index]
 
         try:
-            with _open_as_flat_dataset(file_obj, layout, kwargs) as ds:  # type: ignore[arg-type]
+            with _open_as_flat_dataset(file_obj, open_method, kwargs) as ds:  # type: ignore[arg-type]
                 lon_name, lat_name = _find_geoloc_pair(ds)
                 ds = _ensure_coords(ds, lon_name, lat_name)
 
@@ -392,7 +397,7 @@ def _execute_plan(
                     raise ValueError(
                         f"Variable(s) {missing_vars!r} not found in granule "
                         f"'{gm.granule_id}'. "
-                        f"geometry={geometry!r}, layout={layout!r}, "
+                        f"geometry={geometry!r}, open_method={open_method!r}, "
                         f"spatial_method={spatial_method!r}. "
                         f"Available variables: {avail}. "
                         "Use plan.show_variables() to inspect the dataset."

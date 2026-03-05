@@ -1905,7 +1905,7 @@ class TestPlanShowVariables:
             time_buffer=pd.Timedelta(0),
         )
 
-        p.show_variables(open_dataset_kwargs={"engine": "netcdf4"})
+        p.show_variables(geometry="grid", open_dataset_kwargs={"engine": "netcdf4"})
         captured = capsys.readouterr()
         assert "Dimensions" in captured.out
         assert "Variables" in captured.out
@@ -1924,7 +1924,7 @@ class TestPlanShowVariables:
             time_buffer=pd.Timedelta(0),
         )
         with pytest.raises(ValueError, match="No granules"):
-            p.show_variables()
+            p.show_variables(geometry="grid")
 
 
 # ---------------------------------------------------------------------------
@@ -2156,7 +2156,7 @@ class TestMatchupWithSubsetPlan:
 
 
 # ---------------------------------------------------------------------------
-# L2/swath support — geometry, layout, spatial_method, geolocation detection
+# L2/swath support — geometry, open_method, spatial_method, geolocation detection
 # ---------------------------------------------------------------------------
 
 def _make_l2_swath_dataset(
@@ -2215,20 +2215,20 @@ class TestGeometryParameter:
         with pytest.raises(ValueError, match="geometry"):
             pc.matchup(p, geometry="spheroid")
 
-    def test_grid_geometry_uses_dataset_layout_by_default(self) -> None:
-        """geometry='grid' should default layout to 'dataset'."""
-        from point_collocation.core.engine import _VALID_LAYOUTS
+    def test_grid_geometry_uses_dataset_open_method_by_default(self) -> None:
+        """geometry='grid' should default open_method to 'dataset'."""
+        from point_collocation.core.engine import _VALID_OPEN_METHODS
 
         # Just validate the logic, not actual execution
-        layout = "dataset"  # expected default for grid
-        assert layout in _VALID_LAYOUTS
+        open_method = "dataset"  # expected default for grid
+        assert open_method in _VALID_OPEN_METHODS
 
-    def test_swath_geometry_uses_datatree_merge_layout_by_default(self) -> None:
-        """geometry='swath' should default layout to 'datatree-merge'."""
-        from point_collocation.core.engine import _VALID_LAYOUTS
+    def test_swath_geometry_uses_datatree_merge_open_method_by_default(self) -> None:
+        """geometry='swath' should default open_method to 'datatree-merge'."""
+        from point_collocation.core.engine import _VALID_OPEN_METHODS
 
-        layout = "datatree-merge"  # expected default for swath
-        assert layout in _VALID_LAYOUTS
+        open_method = "datatree-merge"  # expected default for swath
+        assert open_method in _VALID_OPEN_METHODS
 
 
 class TestGeolocDetection:
@@ -2384,10 +2384,10 @@ class TestMissingXoak:
 class TestMissingVariableErrorMessage:
     """Tests for improved error message when variables are missing."""
 
-    def test_missing_var_error_includes_geometry_layout_spatial(
+    def test_missing_var_error_includes_geometry_open_method_spatial(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Error for missing variable must include geometry/layout/spatial_method."""
+        """Error for missing variable must include geometry/open_method/spatial_method."""
         nc_path = str(tmp_path / "test.nc")
         _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(
             nc_path, engine="netcdf4"
@@ -2422,7 +2422,7 @@ class TestMissingVariableErrorMessage:
         msg = str(exc_info.value)
         assert "no_such_var" in msg
         assert "geometry=" in msg
-        assert "layout=" in msg
+        assert "open_method=" in msg
         assert "spatial_method=" in msg
 
 
@@ -2524,7 +2524,7 @@ class TestSwathMatchupWithXoak:
 
 
 class TestShowVariablesLayout:
-    """Tests for plan.show_variables(layout=...) with both layouts."""
+    """Tests for plan.show_variables(geometry=...) with both open methods."""
 
     def test_show_variables_dataset_layout_prints_dims_and_vars(
         self,
@@ -2532,7 +2532,7 @@ class TestShowVariablesLayout:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture,
     ) -> None:
-        """show_variables(layout='dataset') prints dims, vars, and geo info."""
+        """show_variables(geometry='grid') prints dims, vars, and geo info."""
         nc_path = str(tmp_path / "test.nc")
         _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(
             nc_path, engine="netcdf4"
@@ -2553,7 +2553,7 @@ class TestShowVariablesLayout:
             time_buffer=pd.Timedelta(0),
         )
 
-        p.show_variables(layout="dataset", open_dataset_kwargs={"engine": "netcdf4"})
+        p.show_variables(geometry="grid", open_dataset_kwargs={"engine": "netcdf4"})
         captured = capsys.readouterr()
         assert "Dimensions" in captured.out
         assert "Variables" in captured.out
@@ -2591,6 +2591,6 @@ class TestShowVariablesLayout:
             time_buffer=pd.Timedelta(0),
         )
 
-        p.show_variables(layout="dataset", open_dataset_kwargs={"engine": "netcdf4"})
+        p.show_variables(geometry="grid", open_dataset_kwargs={"engine": "netcdf4"})
         captured = capsys.readouterr()
         assert "NONE" in captured.out or "no geolocation" in captured.out.lower()

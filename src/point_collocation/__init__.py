@@ -33,7 +33,7 @@ Quick start
     )
 
     # Inspect what variables are available before running the full matchup
-    plan.show_variables(layout="dataset")
+    plan.show_variables(geometry="grid")
 
     # Open a single granule interactively
     ds = plan.open_dataset(plan[0])

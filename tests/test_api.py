@@ -75,10 +75,10 @@ class TestMatchupSignature:
         params = sig.parameters
         assert "geometry" in params, "matchup() must accept a geometry kwarg"
 
-    def test_accepts_layout(self) -> None:
+    def test_accepts_open_method(self) -> None:
         sig = inspect.signature(matchup)
         params = sig.parameters
-        assert "layout" in params, "matchup() must accept a layout kwarg"
+        assert "open_method" in params, "matchup() must accept an open_method kwarg"
 
     def test_accepts_spatial_method(self) -> None:
         sig = inspect.signature(matchup)

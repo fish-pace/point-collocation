@@ -59,8 +59,8 @@ plan = pc.plan(
     },
 )
 
-print("Available variables (layout='dataset'):")
-plan.show_variables(layout="dataset")
+print("Available variables (geometry='grid'):")
+plan.show_variables(geometry="grid")
 print()
 
 # ---------------------------------------------------------------------------
