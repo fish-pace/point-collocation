@@ -53,29 +53,7 @@ for r in results:
     samples.append(d)
 
 out.write_text(json.dumps(samples, indent=2, default=str))
-import json
-from pathlib import Path
-
-out = Path("/home/jovyan/earthaccess_matchup/examples/fixtures/earthaccess_results_l2.json")
-
-samples = []
-for r in results:
-    d = getattr(r, "data", None)
-    if d is None:
-        d = r.__dict__
-    samples.append(d)
-
-out.write_text(json.dumps(samples, indent=2, default=str))
 print("wrote:", out.resolve())
-
-# bounding_box = (lon_min, lat_min, lon_max, lat_max)
-import earthaccess
-results = earthaccess.search_data(
-    short_name = 'PACE_OCI_L2_AOP',
-    temporal = ("2024-06-13", "2024-06-13"),
-#    bounding_box = (-82.8, 27.38, -82.5, 27.3835)
-)
-len(results)
 
 # Each NetCDF fixture is <1 MB and intended only for structural inspection and examples.
 import earthaccess
