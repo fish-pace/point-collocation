@@ -483,12 +483,18 @@ def _search_earthaccess(
     *,
     source_kwargs: dict[str, Any] | None,
 ) -> tuple[list[Any], list[GranuleMeta]]:
-    """Search earthaccess over the full date range of *points*.
+    """Search earthaccess over the full date range and spatial extent of *points*.
 
     If ``"granule_name"`` is present in *source_kwargs*, it is extracted
     and used to filter results after the search via :func:`fnmatch.fnmatch`
     on each result's ``data_links()``.  This is faster than passing
     ``granule_name`` directly to ``earthaccess.search_data()``.
+
+    A ``bounding_box`` ``(lon_min, lat_min, lon_max, lat_max)`` is
+    automatically derived from *points* and added to the search unless the
+    caller already supplies ``"bounding_box"`` in *source_kwargs*.  This
+    ensures that for L2 products—whose granules are non-rectangular and
+    non-global—only granules that intersect the point cloud are returned.
 
     Returns
     -------
@@ -526,6 +532,18 @@ def _search_earthaccess(
     min_date = str(times.min().date())
     max_date = str(times.max().date())
     search_kwargs = {**base_kwargs, "temporal": (min_date, max_date)}
+
+    # Derive bounding_box from points if not already provided in source_kwargs.
+    # bounding_box = (lon_min, lat_min, lon_max, lat_max)
+    if "bounding_box" not in search_kwargs:
+        lons = points["lon"].astype(float)
+        lats = points["lat"].astype(float)
+        search_kwargs["bounding_box"] = (
+            float(lons.min()),
+            float(lats.min()),
+            float(lons.max()),
+            float(lats.max()),
+        )
 
     results: list[Any] = list(earthaccess.search_data(**search_kwargs))
 

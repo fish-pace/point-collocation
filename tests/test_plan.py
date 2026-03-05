@@ -738,6 +738,103 @@ class TestGranuleNameFiltering:
 
 
 # ---------------------------------------------------------------------------
+# Bounding-box auto-derivation in _search_earthaccess
+# ---------------------------------------------------------------------------
+
+class TestSearchEarthaccessBoundingBox:
+    """Tests for automatic bounding-box derivation from points."""
+
+    def _call_plan(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        points: pd.DataFrame,
+        source_kwargs: dict[str, Any] | None = None,
+    ) -> tuple[MagicMock, Plan]:
+        """Run pc.plan() with a mocked earthaccess; return (mock, plan)."""
+        mock_ea = MagicMock()
+        mock_ea.search_data.return_value = [
+            _make_global_result("2023-06-01T00:00:00Z", "2023-06-01T23:59:59Z")
+        ]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+        sk: dict[str, Any] = source_kwargs if source_kwargs is not None else {"short_name": "TEST"}
+        p = plan(points, source_kwargs=sk)
+        return mock_ea, p
+
+    def test_bounding_box_derived_from_points(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Auto-derived bounding_box is passed to earthaccess.search_data."""
+        pts = pd.DataFrame(
+            {
+                "lat": [30.0, 45.0, 35.0],
+                "lon": [-90.0, -75.0, -80.0],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"] * 3),
+            }
+        )
+        mock_ea, _ = self._call_plan(monkeypatch, pts)
+        call_kwargs = mock_ea.search_data.call_args[1]
+        assert "bounding_box" in call_kwargs
+        lon_min, lat_min, lon_max, lat_max = call_kwargs["bounding_box"]
+        assert lon_min == pytest.approx(-90.0)
+        assert lat_min == pytest.approx(30.0)
+        assert lon_max == pytest.approx(-75.0)
+        assert lat_max == pytest.approx(45.0)
+
+    def test_bounding_box_single_point(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A single point yields a degenerate bounding box (min == max)."""
+        pts = pd.DataFrame(
+            {"lat": [20.0], "lon": [10.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        mock_ea, _ = self._call_plan(monkeypatch, pts)
+        call_kwargs = mock_ea.search_data.call_args[1]
+        lon_min, lat_min, lon_max, lat_max = call_kwargs["bounding_box"]
+        assert lon_min == pytest.approx(10.0)
+        assert lat_min == pytest.approx(20.0)
+        assert lon_max == pytest.approx(10.0)
+        assert lat_max == pytest.approx(20.0)
+
+    def test_user_bounding_box_not_overridden(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When bounding_box is already in source_kwargs, it is used as-is."""
+        pts = pd.DataFrame(
+            {
+                "lat": [30.0, 45.0],
+                "lon": [-90.0, -75.0],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"] * 2),
+            }
+        )
+        user_bbox = (-97.3, 24.6, -81.5, 30.39)
+        mock_ea, _ = self._call_plan(
+            monkeypatch,
+            pts,
+            source_kwargs={"short_name": "TEST", "bounding_box": user_bbox},
+        )
+        call_kwargs = mock_ea.search_data.call_args[1]
+        assert call_kwargs["bounding_box"] == user_bbox
+
+    def test_bounding_box_order_lon_lat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """bounding_box is in (lon_min, lat_min, lon_max, lat_max) order."""
+        pts = pd.DataFrame(
+            {
+                "lat": [10.0, 50.0],
+                "lon": [-100.0, -60.0],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"] * 2),
+            }
+        )
+        mock_ea, _ = self._call_plan(monkeypatch, pts)
+        lon_min, lat_min, lon_max, lat_max = mock_ea.search_data.call_args[1]["bounding_box"]
+        assert lon_min == pytest.approx(-100.0)
+        assert lat_min == pytest.approx(10.0)
+        assert lon_max == pytest.approx(-60.0)
+        assert lat_max == pytest.approx(50.0)
+
+
+# ---------------------------------------------------------------------------
 # Plan.summary()
 # ---------------------------------------------------------------------------
 
