@@ -1876,7 +1876,155 @@ class TestPlanOpenDataset:
         assert ds is fake_ds
         mock_ea.open.assert_called_once_with(fake_results, pqdm_kwargs={"disable": True})
         mock_mfdataset.assert_called_once_with([nc_a, nc_b], chunks={}, engine="netcdf4")
-# ---------------------------------------------------------------------------
+
+    def test_open_dataset_geometry_grid(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_dataset(result, geometry='grid') uses xr.open_dataset."""
+        nc_path = str(tmp_path / "test.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(
+            nc_path, engine="netcdf4"
+        )
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        fake_result = object()
+        p = Plan(
+            points=pts,
+            results=[fake_result],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        ds = p.open_dataset(p[0], geometry="grid", open_dataset_kwargs={"engine": "netcdf4"})
+        assert isinstance(ds, xr.Dataset)
+        assert "sst" in ds
+        ds.close()
+
+    def test_open_dataset_invalid_geometry_raises(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_dataset with invalid geometry raises ValueError."""
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = ["dummy"]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        with pytest.raises(ValueError, match="geometry"):
+            p.open_dataset(p[0], geometry="bad")
+
+    def test_open_dataset_invalid_open_method_raises(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_dataset with invalid open_method raises ValueError."""
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = ["dummy"]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        with pytest.raises(ValueError, match="open_method"):
+            p.open_dataset(p[0], open_method="bad")
+
+    def test_open_mfdataset_with_geometry_grid_uses_open_mfdataset(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_mfdataset(results, geometry='grid') uses xr.open_mfdataset."""
+        nc_a = str(tmp_path / "a.nc")
+        nc_b = str(tmp_path / "b.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=1).to_netcdf(
+            nc_a, engine="netcdf4"
+        )
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=2).to_netcdf(
+            nc_b, engine="netcdf4"
+        )
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_a, nc_b]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        fake_results = [object(), object()]
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=fake_results,
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        fake_ds = xr.Dataset({"sst": (["lat", "lon"], [[1.0]])}, coords={"lat": [0.0], "lon": [0.0]})
+        with patch("xarray.open_mfdataset", return_value=fake_ds) as mock_mfd:
+            ds = p.open_mfdataset(fake_results, geometry="grid", open_dataset_kwargs={"engine": "netcdf4"})
+
+        assert ds is fake_ds
+        mock_mfd.assert_called_once_with([nc_a, nc_b], chunks={}, engine="netcdf4")
+
+    def test_open_mfdataset_geometry_swath_concatenates(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_mfdataset(results, geometry='swath') opens each as DataTree-merge and concatenates."""
+        nc_a = str(tmp_path / "swath_a.nc")
+        nc_b = str(tmp_path / "swath_b.nc")
+        _make_l2_swath_dataset(nrows=3, ncols=4, seed=1).to_netcdf(nc_a, engine="netcdf4")
+        _make_l2_swath_dataset(nrows=3, ncols=4, seed=2).to_netcdf(nc_b, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_a, nc_b]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        fake_results = [object(), object()]
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=fake_results,
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        ds = p.open_mfdataset(
+            fake_results,
+            geometry="swath",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        # Result is a Dataset with a "granule" dimension from concatenation.
+        assert isinstance(ds, xr.Dataset)
+        assert ds.sizes["granule"] == 2
+        assert "sst" in ds
+
 
 class TestPlanShowVariables:
     def test_show_variables_prints_dims_and_vars(

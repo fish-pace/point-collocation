@@ -188,6 +188,8 @@ class Plan:
     def open_dataset(
         self,
         result: Any,
+        geometry: str | None = None,
+        open_method: str | None = None,
         open_dataset_kwargs: dict[str, Any] | None = None,
     ) -> "xr.Dataset":
         """Open a single granule result as an :class:`xarray.Dataset`.
@@ -197,16 +199,49 @@ class Plan:
         result:
             A single earthaccess result object, typically obtained via
             ``plan[n]``.
+        geometry:
+            Data geometry type.  ``"grid"`` (L3/gridded) or ``"swath"``
+            (L2/swath).  When provided, determines the default
+            ``open_method`` if *open_method* is not given explicitly.
+        open_method:
+            How to open the granule.  ``"dataset"`` uses a plain
+            ``xarray.open_dataset`` call (the default when *geometry* is
+            ``None`` or ``"grid"``).  ``"datatree-merge"`` opens as a
+            DataTree and merges all groups into a flat dataset (the
+            default when *geometry* is ``"swath"``).
         open_dataset_kwargs:
-            Keyword arguments forwarded to ``xarray.open_dataset``.
-            ``chunks`` defaults to ``{}`` (lazy/dask loading) unless
-            explicitly overridden.  ``engine`` defaults to ``"h5netcdf"``
-            when not specified.
+            Keyword arguments forwarded to ``xarray.open_dataset`` or
+            ``xarray.open_datatree``.  ``chunks`` defaults to ``{}``
+            (lazy/dask loading) unless explicitly overridden.  ``engine``
+            defaults to ``"h5netcdf"`` when not specified.
 
         Returns
         -------
         xarray.Dataset
         """
+        from point_collocation.core.engine import (
+            _VALID_GEOMETRIES,
+            _VALID_OPEN_METHODS,
+            _merge_datatree,
+            _open_datatree,
+        )
+
+        if geometry is not None and geometry not in _VALID_GEOMETRIES:
+            raise ValueError(
+                f"geometry={geometry!r} is not valid. "
+                f"Must be one of {sorted(_VALID_GEOMETRIES)}."
+            )
+
+        # Resolve open_method default from geometry.
+        if open_method is None:
+            open_method = "datatree-merge" if geometry == "swath" else "dataset"
+
+        if open_method not in _VALID_OPEN_METHODS:
+            raise ValueError(
+                f"open_method={open_method!r} is not valid. "
+                f"Must be one of {sorted(_VALID_OPEN_METHODS)}."
+            )
+
         try:
             import earthaccess  # type: ignore[import-untyped]
         except ImportError as exc:
@@ -226,11 +261,22 @@ class Plan:
             raise RuntimeError(
                 f"Expected 1 file object from earthaccess.open, got {len(file_objs)}."
             )
+
+        if open_method == "datatree-merge":
+            dt = _open_datatree(file_objs[0], kwargs)
+            try:
+                return _merge_datatree(dt)
+            finally:
+                if hasattr(dt, "close"):
+                    dt.close()
+
         return xr.open_dataset(file_objs[0], **kwargs)  # type: ignore[arg-type]
 
     def open_mfdataset(
         self,
         results: "list[Any] | Plan",
+        geometry: str | None = None,
+        open_method: str | None = None,
         open_dataset_kwargs: dict[str, Any] | None = None,
     ) -> "xr.Dataset":
         """Open multiple granule results as a single :class:`xarray.Dataset`.
@@ -241,16 +287,51 @@ class Plan:
             A list of earthaccess result objects, or a :class:`Plan`
             (e.g. ``plan[0:2]``).  When a :class:`Plan` is passed its
             ``results`` attribute is used.
+        geometry:
+            Data geometry type.  ``"grid"`` (L3/gridded) or ``"swath"``
+            (L2/swath).  When provided, determines the default
+            ``open_method`` if *open_method* is not given explicitly.
+        open_method:
+            How to open each granule.  ``"dataset"`` uses
+            ``xarray.open_mfdataset`` across all file objects (the default
+            when *geometry* is ``None`` or ``"grid"``).
+            ``"datatree-merge"`` opens each granule as a DataTree, merges
+            its groups into a flat dataset, then concatenates all granules
+            along a new ``granule`` dimension (the default when *geometry*
+            is ``"swath"``).
         open_dataset_kwargs:
-            Keyword arguments forwarded to ``xarray.open_mfdataset``.
-            ``chunks`` defaults to ``{}`` (lazy/dask loading) unless
-            explicitly overridden.  ``engine`` defaults to ``"h5netcdf"``
-            when not specified.
+            Keyword arguments forwarded to ``xarray.open_mfdataset`` or
+            ``xarray.open_datatree``.  ``chunks`` defaults to ``{}``
+            (lazy/dask loading) unless explicitly overridden.  ``engine``
+            defaults to ``"h5netcdf"`` when not specified.
 
         Returns
         -------
         xarray.Dataset
         """
+        from point_collocation.core.engine import (
+            _VALID_GEOMETRIES,
+            _VALID_OPEN_METHODS,
+            _merge_datatree,
+            _open_datatree,
+        )
+
+        if geometry is not None and geometry not in _VALID_GEOMETRIES:
+            raise ValueError(
+                f"geometry={geometry!r} is not valid. "
+                f"Must be one of {sorted(_VALID_GEOMETRIES)}."
+            )
+
+        # Resolve open_method default from geometry.
+        if open_method is None:
+            open_method = "datatree-merge" if geometry == "swath" else "dataset"
+
+        if open_method not in _VALID_OPEN_METHODS:
+            raise ValueError(
+                f"open_method={open_method!r} is not valid. "
+                f"Must be one of {sorted(_VALID_OPEN_METHODS)}."
+            )
+
         try:
             import earthaccess  # type: ignore[import-untyped]
         except ImportError as exc:
@@ -267,6 +348,22 @@ class Plan:
 
         result_list = results.results if isinstance(results, Plan) else list(results)
         file_objs = earthaccess.open(result_list, pqdm_kwargs={"disable": True})
+
+        if open_method == "datatree-merge":
+            # Open each granule as a DataTree, merge its groups, then
+            # concatenate all granule datasets along a new "granule" dim.
+            merged_datasets: list[xr.Dataset] = []
+            for file_obj in file_objs:
+                dt = _open_datatree(file_obj, kwargs)
+                try:
+                    merged_datasets.append(_merge_datatree(dt))
+                finally:
+                    if hasattr(dt, "close"):
+                        dt.close()
+            if not merged_datasets:
+                return xr.Dataset()
+            return xr.concat(merged_datasets, dim="granule")
+
         return xr.open_mfdataset(file_objs, **kwargs)  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------
