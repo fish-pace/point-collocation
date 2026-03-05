@@ -19,7 +19,7 @@ Typical workflow
         source_kwargs={"short_name": "PACE_OCI_L3M_RRS"},
         time_buffer="0h",
     )
-    print(plan.summary())
+    plan.summary()
     plan.show_variables()
 
     result = pc.matchup(plan, variables=["Rrs"])   # executes the plan; one row per point×granule
@@ -235,14 +235,21 @@ class Plan:
     # Summary
     # ------------------------------------------------------------------
 
-    def summary(self, n: int = 50) -> str:
-        """Return a human-readable summary of the plan.
+    def summary(self, n: int | None = None) -> None:
+        """Print a human-readable summary of the plan.
 
         Parameters
         ----------
         n:
-            Maximum number of points shown in the per-point section.
+            Number of points to show in the per-point section.
+            Defaults to ``min(5, len(self.points))``.
+            ``0`` or negative values suppress the per-point section.
         """
+        if n is None:
+            n = min(5, len(self.points))
+        elif n < 0:
+            n = 0
+
         zero_match = sum(
             1 for g_list in self.point_granule_map.values() if len(g_list) == 0
         )
@@ -256,22 +263,22 @@ class Plan:
             f"  Points with >1 matches: {multi_match}",
             f"  Variables  : {self.variables}",
             f"  Time buffer: {self.time_buffer}",
-            "",
-            f"First {min(n, len(self.points))} point(s):",
         ]
 
-        for pt_idx, row in self.points.head(n).iterrows():
-            g_indices = self.point_granule_map.get(pt_idx, [])
-            lines.append(
-                f"  [{pt_idx}] lat={row['lat']:.4f}, lon={row['lon']:.4f}, "
-                f"time={row['time']}: {len(g_indices)} match(es)"
-            )
-            for g_idx in g_indices[:3]:
-                lines.append(f"    → {self.granules[g_idx].granule_id}")
-            if len(g_indices) > 3:
-                lines.append(f"    … and {len(g_indices) - 3} more")
+        n_show = min(n, len(self.points))
+        if n_show > 0:
+            lines.append("")
+            lines.append(f"First {n_show} point(s):")
+            for pt_idx, row in self.points.head(n_show).iterrows():
+                g_indices = self.point_granule_map.get(pt_idx, [])
+                lines.append(
+                    f"  [{pt_idx}] lat={row['lat']:.4f}, lon={row['lon']:.4f}, "
+                    f"time={row['time']}: {len(g_indices)} match(es)"
+                )
+                for g_idx in g_indices:
+                    lines.append(f"    → {self.granules[g_idx].granule_id}")
 
-        return "\n".join(lines)
+        print("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------

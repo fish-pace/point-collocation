@@ -588,30 +588,92 @@ class TestPlanSummary:
             time_buffer=pd.Timedelta(0),
         )
 
-    def test_summary_is_string(self) -> None:
+    def test_summary_returns_none(self, capsys: pytest.CaptureFixture[str]) -> None:
         p = self._make_plan()
-        assert isinstance(p.summary(), str)
+        result = p.summary()
+        assert result is None
 
-    def test_summary_contains_zero_match_count(self) -> None:
+    def test_summary_prints_output(self, capsys: pytest.CaptureFixture[str]) -> None:
         p = self._make_plan()
-        s = p.summary()
+        p.summary()
+        out = capsys.readouterr().out
+        assert len(out) > 0
+
+    def test_summary_contains_zero_match_count(self, capsys: pytest.CaptureFixture[str]) -> None:
+        p = self._make_plan()
+        p.summary()
+        s = capsys.readouterr().out
         assert "0 matches" in s or "0 match" in s
 
-    def test_summary_contains_multi_match_count(self) -> None:
+    def test_summary_contains_multi_match_count(self, capsys: pytest.CaptureFixture[str]) -> None:
         p = self._make_plan()
-        s = p.summary()
+        p.summary()
+        s = capsys.readouterr().out
         assert ">1" in s
 
-    def test_summary_n_limits_points(self) -> None:
+    def test_summary_n_limits_points(self, capsys: pytest.CaptureFixture[str]) -> None:
         p = self._make_plan()
-        s_limited = p.summary(n=1)
-        # Only shows 1 point's detail
-        assert s_limited.count("→") <= 1  # at most 1 granule URL shown
+        p.summary(n=1)
+        s = capsys.readouterr().out
+        # With n=1, only the first point (index 0, no matches) is shown
+        assert "    →" not in s  # point 0 has 0 granules
 
-    def test_summary_contains_granule_urls(self) -> None:
+    def test_summary_n_shows_all_granule_urls(self, capsys: pytest.CaptureFixture[str]) -> None:
         p = self._make_plan()
-        s = p.summary()
+        p.summary(n=3)
+        s = capsys.readouterr().out
+        # Point 2 has 2 matches; both URLs must appear (no truncation)
+        assert "https://example.com/a.nc" in s
+        assert "https://example.com/b.nc" in s
+
+    def test_summary_contains_granule_urls(self, capsys: pytest.CaptureFixture[str]) -> None:
+        p = self._make_plan()
+        p.summary()
+        s = capsys.readouterr().out
         assert "https://example.com/a.nc" in s or "https://example.com/b.nc" in s
+
+    def test_summary_default_n_is_5_or_fewer(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # Plan has 3 points; default n should be min(5, 3) = 3
+        p = self._make_plan()
+        p.summary()
+        s = capsys.readouterr().out
+        assert "First 3 point(s):" in s
+
+    def test_summary_default_n_capped_at_5(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # Build a plan with 10 points; default n should be min(5, 10) = 5
+        pts = pd.DataFrame(
+            {
+                "lat": [float(i) for i in range(10)],
+                "lon": [float(i) for i in range(10)],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"] * 10),
+            }
+        )
+        p = Plan(
+            points=pts,
+            results=[],
+            granules=[],
+            point_granule_map={i: [] for i in range(10)},
+            variables=[],
+            source_kwargs={},
+            time_buffer=pd.Timedelta(0),
+        )
+        p.summary()
+        s = capsys.readouterr().out
+        assert "First 5 point(s):" in s
+
+    def test_summary_n_zero_hides_per_point_section(self, capsys: pytest.CaptureFixture[str]) -> None:
+        p = self._make_plan()
+        p.summary(n=0)
+        s = capsys.readouterr().out
+        assert "First 0 point(s):" not in s
+        assert "    →" not in s
+
+    def test_summary_negative_n_acts_like_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
+        p = self._make_plan()
+        p.summary(n=-1)
+        s = capsys.readouterr().out
+        assert "First" not in s
+        assert "    →" not in s
 
 
 # ---------------------------------------------------------------------------
