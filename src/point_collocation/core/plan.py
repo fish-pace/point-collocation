@@ -320,11 +320,14 @@ class Plan:
             1 for g_list in self.point_granule_map.values() if len(g_list) > 1
         )
 
+        matched_granule_count = len(
+            {g_idx for g_list in self.point_granule_map.values() for g_idx in g_list}
+        )
+
         lines: list[str] = [
-            f"Plan: {len(self.points)} points → {len(self.granules)} unique granule(s)",
+            f"Plan: {len(self.points)} points → {matched_granule_count} unique granule(s)",
             f"  Points with 0 matches : {zero_match}",
             f"  Points with >1 matches: {multi_match}",
-            f"  Variables  : {self.variables}",
             f"  Time buffer: {self.time_buffer}",
         ]
 

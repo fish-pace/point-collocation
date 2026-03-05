@@ -865,6 +865,49 @@ class TestPlanSummary:
         assert "First" not in s
         assert "    →" not in s
 
+    def test_summary_does_not_show_variables(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """summary() should not print a 'Variables' line."""
+        p = self._make_plan()
+        p.summary()
+        s = capsys.readouterr().out
+        assert "Variables" not in s
+
+    def test_summary_granule_count_is_matched_not_total(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Granule count reflects unique matched granules, not all granules in the plan."""
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, 1.0, 2.0],
+                "lon": [0.0, 1.0, 2.0],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"] * 3),
+            }
+        )
+        # Build 5 granules but only 2 are matched (indices 0 and 1)
+        granules = [
+            GranuleMeta(
+                granule_id=f"https://example.com/{c}.nc",
+                begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+                end=pd.Timestamp("2023-06-01T23:59:59Z"),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=i,
+            )
+            for i, c in enumerate("abcde")
+        ]
+        # Only granules 0 and 1 are referenced; granules 2-4 are unmatched
+        p = Plan(
+            points=pts,
+            results=[],
+            granules=granules,
+            point_granule_map={0: [], 1: [0], 2: [0, 1]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        p.summary()
+        s = capsys.readouterr().out
+        # Should show 2 matched granules, not 5 total
+        assert "3 points → 2 unique granule(s)" in s
+
 
 # ---------------------------------------------------------------------------
 # matchup(plan) — plan-based execution
