@@ -27,6 +27,7 @@ Typical workflow
 
 from __future__ import annotations
 
+import bisect
 import datetime
 import fnmatch
 from dataclasses import dataclass, field
@@ -999,6 +1000,18 @@ def _match_points_to_granules(
     All timestamps are compared as timezone-naive UTC values so that
     tz-aware granule timestamps (ending in ``Z``) and tz-naive point
     timestamps can be mixed without error.
+
+    Performance
+    -----------
+    Granules are sorted by ``begin`` time once, then per-point candidate
+    selection uses :func:`bisect.bisect_right` to find the temporal upper
+    bound in O(log M) rather than scanning all M granules.  When granule
+    end-times are also monotonically non-decreasing in begin-sorted order
+    (true for non-overlapping products such as daily L3 tiles), a second
+    binary search on ``end`` gives the temporal lower bound too, reducing
+    per-point work to O(log M + k) where *k* is the number of granules that
+    actually overlap the point's timestamp.  For typical daily-granule
+    products *k* ≈ 1, giving near-linear O(N log M) scaling overall.
     """
     def _to_utc_naive(ts: pd.Timestamp) -> pd.Timestamp:
         """Strip tz info from a Timestamp, treating it as UTC."""
@@ -1008,18 +1021,65 @@ def _match_points_to_granules(
 
     result: dict[Any, list[int]] = {}
 
-    for pt_idx, row in points.iterrows():
-        t = _to_utc_naive(pd.Timestamp(row["time"]))
-        lat = float(row["lat"])
-        lon = float(row["lon"])
+    if not granule_metas:
+        return {pt_idx: [] for pt_idx in points.index}
+
+    # ------------------------------------------------------------------
+    # Pre-process granules once (avoid repeated timestamp conversions
+    # inside the per-point loop).
+    # ------------------------------------------------------------------
+    g_begins = [_to_utc_naive(gm.begin) for gm in granule_metas]
+    g_ends = [_to_utc_naive(gm.end) for gm in granule_metas]
+
+    # Sort by begin time so we can binary-search for the temporal upper bound.
+    sort_order = sorted(range(len(granule_metas)), key=lambda i: g_begins[i])
+    sorted_begins = [g_begins[i] for i in sort_order]
+    sorted_ends = [g_ends[i] for i in sort_order]
+
+    # If end-times are also non-decreasing in begin-sorted order (true for
+    # non-overlapping granules such as daily L3 products), we can binary-
+    # search for the lower temporal bound as well.  ``all()`` short-circuits
+    # on the first out-of-order pair so this is O(1) for overlapping sets
+    # and O(M) in the worst case — a one-time preprocessing cost.
+    ends_sorted = all(
+        sorted_ends[i] <= sorted_ends[i + 1] for i in range(len(sorted_ends) - 1)
+    )
+
+    # ------------------------------------------------------------------
+    # Pre-convert the point time column to UTC-naive once.
+    # ------------------------------------------------------------------
+    pt_times: pd.Series = pd.to_datetime(points["time"])
+    if hasattr(pt_times.dtype, "tz") and pt_times.dtype.tz is not None:
+        pt_times = pt_times.dt.tz_convert("UTC").dt.tz_localize(None)
+
+    # ------------------------------------------------------------------
+    # Per-point matching — itertuples is ~10× faster than iterrows.
+    # ------------------------------------------------------------------
+    lats = points["lat"].to_numpy(dtype=float)
+    lons = points["lon"].to_numpy(dtype=float)
+    pt_index = list(points.index)
+
+    for row_pos, pt_idx in enumerate(pt_index):
+        t = _to_utc_naive(pd.Timestamp(pt_times.iloc[row_pos]))
+        lat = lats[row_pos]
+        lon = lons[row_pos]
+
+        t_lo = t - buffer
+        t_hi = t + buffer
+
+        # Upper bound: first granule whose begin > t + buffer.
+        hi = bisect.bisect_right(sorted_begins, t_hi)
+
+        # Lower bound: first granule whose end >= t - buffer.
+        lo = bisect.bisect_left(sorted_ends, t_lo, hi=hi) if ends_sorted else 0
 
         matching: list[int] = []
-        for g_idx, gm in enumerate(granule_metas):
-            begin = _to_utc_naive(gm.begin)
-            end = _to_utc_naive(gm.end)
-            # Temporal check
-            if not (begin - buffer <= t <= end + buffer):
+        for i in range(lo, hi):
+            # For the unsorted-ends case, still apply the end check explicitly.
+            if sorted_ends[i] < t_lo:
                 continue
+            g_idx = sort_order[i]
+            gm = granule_metas[g_idx]
             # Spatial check — polygon (L2 GPolygon) takes priority over bbox
             if gm.polygon is not None:
                 if not _point_in_polygon(lon, lat, gm.polygon):

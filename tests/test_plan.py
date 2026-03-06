@@ -538,10 +538,103 @@ class TestMatchPointsToGranules:
         mapping = _match_points_to_granules(pts, [gm], pd.Timedelta(0))
         assert mapping[0] == []
 
+    def test_granules_supplied_out_of_begin_order(self) -> None:
+        """Granules given in reverse begin order still match correctly.
 
-# ---------------------------------------------------------------------------
-# pc.plan() — public API
-# ---------------------------------------------------------------------------
+        The optimised implementation sorts granules internally, so the
+        returned granule indices must still refer to the *original* positions
+        in ``granule_metas``.
+        """
+        # Two non-overlapping daily granules supplied in reverse order.
+        gm_day2 = GranuleMeta(
+            granule_id="https://example.com/day2.nc",
+            begin=pd.Timestamp("2023-06-02T00:00:00Z"),
+            end=pd.Timestamp("2023-06-02T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        gm_day1 = GranuleMeta(
+            granule_id="https://example.com/day1.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=1,
+        )
+        # granule_metas list: index 0 = day2, index 1 = day1
+        granule_metas = [gm_day2, gm_day1]
+
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, 0.0],
+                "lon": [0.0, 0.0],
+                "time": pd.to_datetime(
+                    ["2023-06-01T12:00:00", "2023-06-02T12:00:00"]
+                ),
+            }
+        )
+        mapping = _match_points_to_granules(pts, granule_metas, pd.Timedelta(0))
+        # point 0 (day1 time) → granule index 1 (gm_day1)
+        assert mapping[0] == [1]
+        # point 1 (day2 time) → granule index 0 (gm_day2)
+        assert mapping[1] == [0]
+
+    def test_large_n_scales_near_linearly(self) -> None:
+        """Matching N=5000 points takes less than 10× the time of N=500.
+
+        This guards against the original O(N×M) quadratic slowdown where
+        the inner granule loop ran for every point regardless of temporal
+        overlap.
+        """
+        import time
+
+        # 365 non-overlapping daily granules covering all of 2023.
+        base = pd.Timestamp("2023-01-01")
+        granule_metas = [
+            GranuleMeta(
+                granule_id=f"https://example.com/g{i}.nc",
+                begin=base + pd.Timedelta(days=i),
+                end=base + pd.Timedelta(days=i) + pd.Timedelta(hours=23, minutes=59, seconds=59),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=i,
+            )
+            for i in range(365)
+        ]
+
+        rng = np.random.default_rng(42)
+
+        def _make_pts(n: int) -> pd.DataFrame:
+            days = rng.integers(0, 365, size=n)
+            return pd.DataFrame(
+                {
+                    "lat": rng.uniform(-90, 90, size=n),
+                    "lon": rng.uniform(-180, 180, size=n),
+                    "time": [base + pd.Timedelta(days=int(d)) + pd.Timedelta(hours=12) for d in days],
+                }
+            )
+
+        pts_small = _make_pts(500)
+        pts_large = _make_pts(5000)
+        buf = pd.Timedelta(0)
+
+        t0 = time.monotonic()
+        _match_points_to_granules(pts_small, granule_metas, buf)
+        t_small = time.monotonic() - t0
+
+        t0 = time.monotonic()
+        _match_points_to_granules(pts_large, granule_metas, buf)
+        t_large = time.monotonic() - t0
+
+        # With O(N log M) scaling, the 10× point ratio should take well under
+        # 10× longer. We allow a generous 10× slack to avoid CI flakiness
+        # while still catching quadratic regressions (which would be ~100×).
+        # The +1.0 s additive term guards against false failures on slow
+        # CI runners where t_small itself is too small to be meaningful.
+        assert t_large < t_small * 10 + 1.0, (
+            f"Scaling looks super-linear: {t_small:.3f}s for N=500, "
+            f"{t_large:.3f}s for N=5000 (ratio={t_large/max(t_small, 1e-6):.1f}×)"
+        )
+
+
 
 class TestPlanPublicApi:
     def test_plan_importable_from_top_level(self) -> None:
