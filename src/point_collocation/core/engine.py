@@ -23,6 +23,8 @@ Future extension points
 
 from __future__ import annotations
 
+import os
+import pathlib
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -53,6 +55,9 @@ def matchup(
     open_method: str | None = None,
     spatial_method: str | None = None,
     open_dataset_kwargs: dict | None = None,
+    silent: bool = False,
+    batch_size: int = 10,
+    save_dir: str | os.PathLike | None = None,
 ) -> pd.DataFrame:
     """Extract variables from cloud-hosted granules at the given points.
 
@@ -94,6 +99,21 @@ def matchup(
         ``chunks`` defaults to ``{}`` (lazy/dask loading) unless
         explicitly overridden.  ``engine`` defaults to ``"h5netcdf"``
         when no ``engine`` key is present in the dict.
+    silent:
+        When ``False`` (default), a progress message is printed to
+        stdout after every *batch_size* granules.  Set to ``True`` to
+        suppress all progress output.
+    batch_size:
+        Number of granules to process between progress reports (and
+        between intermediate saves when *save_dir* is set).  Defaults
+        to ``10``.
+    save_dir:
+        Directory in which intermediate results are saved as Parquet
+        files after each batch of *batch_size* granules.  The directory
+        is created automatically if it does not exist.  Each batch is
+        saved as ``plan_<first>_<last>.parquet`` where *first* and
+        *last* are the granule indices from the plan.  When ``None``
+        (default), no intermediate files are written.
 
     Returns
     -------
@@ -157,6 +177,9 @@ def matchup(
         open_method=open_method,
         spatial_method=spatial_method,
         variables=effective_vars,
+        silent=silent,
+        batch_size=batch_size,
+        save_dir=save_dir,
         **effective_kwargs,
     )
 
@@ -329,6 +352,9 @@ def _execute_plan(
     open_method: str,
     spatial_method: str,
     variables: list[str],
+    silent: bool = False,
+    batch_size: int = 10,
+    save_dir: str | os.PathLike | None = None,
     **open_dataset_kwargs: object,
 ) -> pd.DataFrame:
     """Execute a :class:`~point_collocation.core.plan.Plan`.
@@ -350,6 +376,19 @@ def _execute_plan(
     kwargs = dict(open_dataset_kwargs)
     if "engine" not in kwargs:
         kwargs["engine"] = "h5netcdf"
+
+    # Prepare save directory if requested.
+    save_path: pathlib.Path | None = None
+    if save_dir is not None:
+        try:
+            import pyarrow  # type: ignore[import-untyped]  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "The 'pyarrow' package is required to save progress as Parquet files. "
+                "Install it with: pip install pyarrow"
+            ) from exc
+        save_path = pathlib.Path(save_dir)
+        save_path.mkdir(parents=True, exist_ok=True)
 
     # Build granule_index → [point_indices] for all matched granules
     granule_to_points: dict[int, list[object]] = {}
@@ -375,10 +414,22 @@ def _execute_plan(
     # Track whether we have already validated geometry on the first granule.
     geometry_checked = False
 
+    # Batch tracking for progress reporting and intermediate saves.
+    sorted_granule_items = sorted(granule_to_points.items())
+    total_granules = len(sorted_granule_items)
+    granules_processed = 0
+    batch_matched_points = 0
+    batch_granule_count = 0
+    batch_rows: list[dict] = []
+    batch_first_g_idx: int | None = None
+
     # Process granules, opening each file once
-    for g_idx, pt_indices in sorted(granule_to_points.items()):
+    for g_idx, pt_indices in sorted_granule_items:
         gm = plan.granules[g_idx]
         file_obj = opened_files[gm.result_index]
+
+        if batch_first_g_idx is None:
+            batch_first_g_idx = g_idx
 
         try:
             with _open_as_flat_dataset(file_obj, open_method, kwargs) as ds:  # type: ignore[arg-type]
@@ -413,6 +464,9 @@ def _execute_plan(
                         _extract_xoak(ds, row, variables, lon_name, lat_name)
 
                     output_rows.append(row)
+                    batch_rows.append(row)
+
+                batch_matched_points += len(pt_indices)
 
         except ValueError:
             raise
@@ -424,6 +478,30 @@ def _execute_plan(
                 for var in variables:
                     row[var] = float("nan")
                 output_rows.append(row)
+                batch_rows.append(row)
+
+        granules_processed += 1
+        batch_granule_count += 1
+        batch_last_g_idx = g_idx
+
+        # At the end of each batch (or the final granule), report progress and save.
+        if granules_processed % batch_size == 0 or granules_processed == total_granules:
+            batch_start = granules_processed - batch_granule_count + 1
+            batch_end = granules_processed
+            if not silent:
+                print(
+                    f"granules {batch_start}-{batch_end} of {total_granules} processed, "
+                    f"{batch_matched_points} points matched"
+                )
+            if save_path is not None and batch_rows:
+                batch_df = pd.DataFrame(batch_rows)
+                parquet_name = f"plan_{batch_first_g_idx}_{batch_last_g_idx}.parquet"
+                batch_df.to_parquet(save_path / parquet_name, index=False)
+            # Reset batch accumulators.
+            batch_rows = []
+            batch_matched_points = 0
+            batch_granule_count = 0
+            batch_first_g_idx = None
 
     if not output_rows:
         empty = plan.points.iloc[:0].copy()

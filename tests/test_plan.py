@@ -1695,6 +1695,267 @@ class TestMatchupWithPlan:
             "2D variable must return a value when chunks={} (dask) is used, not NaN"
         )
 
+    def test_matchup_silent_false_prints_progress(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """silent=False (default) prints progress after each batch."""
+        nc_path = str(tmp_path / "AQUA_MODIS.20230601.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        pc.matchup(p, geometry="grid", open_dataset_kwargs={"engine": "netcdf4"}, silent=False)
+        captured = capsys.readouterr()
+        assert "granules" in captured.out
+        assert "processed" in captured.out
+
+    def test_matchup_silent_true_suppresses_output(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """silent=True suppresses all progress output."""
+        nc_path = str(tmp_path / "AQUA_MODIS.20230601.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        pc.matchup(p, geometry="grid", open_dataset_kwargs={"engine": "netcdf4"}, silent=True)
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+    def test_matchup_save_dir_creates_parquet_files(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """save_dir causes batch parquet files to be written."""
+        nc_a = str(tmp_path / "a.nc")
+        nc_b = str(tmp_path / "b.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=1).to_netcdf(nc_a)
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=2).to_netcdf(nc_b)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_a, nc_b]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, 0.0],
+                "lon": [0.0, 0.0],
+                "time": pd.to_datetime(["2023-06-01T12:00:00", "2023-06-02T12:00:00"]),
+            }
+        )
+        gm_a = GranuleMeta(
+            granule_id="https://example.com/a.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        gm_b = GranuleMeta(
+            granule_id="https://example.com/b.nc",
+            begin=pd.Timestamp("2023-06-02T00:00:00Z"),
+            end=pd.Timestamp("2023-06-02T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=1,
+        )
+        p = Plan(
+            points=pts,
+            results=[object(), object()],
+            granules=[gm_a, gm_b],
+            point_granule_map={0: [0], 1: [1]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        save_dir = tmp_path / "_temp_data"
+        pc.matchup(
+            p,
+            geometry="grid",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            silent=True,
+            batch_size=1,
+            save_dir=save_dir,
+        )
+
+        parquet_files = list(save_dir.glob("plan_*.parquet"))
+        assert len(parquet_files) == 2, f"Expected 2 parquet files, got {len(parquet_files)}"
+
+    def test_matchup_save_dir_parquet_content_matches_result(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Parquet files saved by save_dir contain the same rows as the final result."""
+        nc_path = str(tmp_path / "AQUA_MODIS.20230601.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        save_dir = tmp_path / "_temp_data"
+        result = pc.matchup(
+            p,
+            geometry="grid",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            silent=True,
+            save_dir=save_dir,
+        )
+
+        parquet_files = list(save_dir.glob("plan_*.parquet"))
+        assert len(parquet_files) == 1
+        saved_df = pd.read_parquet(parquet_files[0])
+        assert list(saved_df.columns) == list(result.columns)
+        assert len(saved_df) == len(result)
+
+    def test_matchup_batch_size_controls_print_frequency(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """batch_size controls how often progress is printed."""
+        # Create 3 granule files
+        nc_files = []
+        for i in range(3):
+            nc_path = str(tmp_path / f"g{i}.nc")
+            _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=i).to_netcdf(nc_path)
+            nc_files.append(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = nc_files
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, 0.0, 0.0],
+                "lon": [0.0, 0.0, 0.0],
+                "time": pd.to_datetime(
+                    ["2023-06-01T12:00:00", "2023-06-02T12:00:00", "2023-06-03T12:00:00"]
+                ),
+            }
+        )
+        granules = [
+            GranuleMeta(
+                granule_id=f"https://example.com/g{i}.nc",
+                begin=pd.Timestamp(f"2023-06-0{i+1}T00:00:00Z"),
+                end=pd.Timestamp(f"2023-06-0{i+1}T23:59:59Z"),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=i,
+            )
+            for i in range(3)
+        ]
+        p = Plan(
+            points=pts,
+            results=[object(), object(), object()],
+            granules=granules,
+            point_granule_map={0: [0], 1: [1], 2: [2]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        # batch_size=1 → 3 lines of output for 3 granules
+        pc.matchup(
+            p,
+            geometry="grid",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            silent=False,
+            batch_size=1,
+        )
+        captured = capsys.readouterr()
+        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+        assert len(lines) == 3
+        # Each line must follow the documented format
+        for line in lines:
+            assert "granules" in line
+            assert "of 3 processed" in line
+            assert "points matched" in line
+
+    def test_matchup_save_dir_creates_directory_if_missing(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """save_dir is created automatically when it does not exist."""
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = []
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[],
+            granules=[],
+            point_granule_map={0: []},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        new_dir = tmp_path / "does_not_exist" / "_temp_data"
+        assert not new_dir.exists()
+        pc.matchup(p, geometry="grid", silent=True, save_dir=new_dir)
+        assert new_dir.exists()
+
 
 # ---------------------------------------------------------------------------
 # Task 1: variables removed from plan()

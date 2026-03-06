@@ -23,6 +23,7 @@ dev = [
     "pytest-cov",
     "ruff",
     "mypy",
+    "pyarrow>=10.0",
 ]
 docs = [
     "mkdocs>=1.5,<2.0",
