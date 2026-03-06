@@ -21,6 +21,7 @@ dependencies:
   # linting / type-checking
   - ruff
   - mypy
+  - ipykernel
   - pip
   - pip:
       # docs (mkdocstrings extras are pip-only)
