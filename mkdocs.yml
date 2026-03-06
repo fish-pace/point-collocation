@@ -30,6 +30,7 @@ nav:
   - More Examples: more_examples.md
   - API Reference: api.md
   - Contributing: contributing.md
+  - Releasing: releasing.md
 
 plugins:
   - search
