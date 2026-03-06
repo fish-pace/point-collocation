@@ -1371,7 +1371,7 @@ class TestMatchupWithPlan:
     def test_matchup_with_plan_calls_open(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """matchup(plan) must call earthaccess.open with plan.results."""
+        """matchup(plan) must call earthaccess.open once per batch with that batch's results."""
         nc_path = str(tmp_path / "AQUA_MODIS.20230601.nc")
         _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(nc_path)
 
@@ -1955,6 +1955,86 @@ class TestMatchupWithPlan:
         assert not new_dir.exists()
         pc.matchup(p, geometry="grid", silent=True, save_dir=new_dir)
         assert new_dir.exists()
+
+    def test_matchup_opens_files_per_batch_not_all_at_once(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """earthaccess.open must be called once per batch, not once for all granules.
+
+        This is the core memory-management invariant: opening every file upfront
+        causes peak RAM to grow with the total number of granules.  Opening only
+        the batch's files lets the OS reclaim handles between batches.
+        """
+        # Build 3 granule files
+        nc_files = []
+        for i in range(3):
+            nc_path = str(tmp_path / f"g{i}.nc")
+            _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=i).to_netcdf(nc_path)
+            nc_files.append(nc_path)
+
+        open_call_args: list[list] = []
+
+        mock_ea = MagicMock()
+
+        def fake_open(results, **kwargs):
+            open_call_args.append(list(results))
+            # Return one file path per result in this batch
+            return [nc_files[i] for i in range(len(results))]
+
+        mock_ea.open.side_effect = fake_open
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        fake_results = [object(), object(), object()]
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, 0.0, 0.0],
+                "lon": [0.0, 0.0, 0.0],
+                "time": pd.to_datetime(
+                    ["2023-06-01T12:00:00", "2023-06-02T12:00:00", "2023-06-03T12:00:00"]
+                ),
+            }
+        )
+        granules = [
+            GranuleMeta(
+                granule_id=f"https://example.com/g{i}.nc",
+                begin=pd.Timestamp(f"2023-06-0{i+1}T00:00:00Z"),
+                end=pd.Timestamp(f"2023-06-0{i+1}T23:59:59Z"),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=i,
+            )
+            for i in range(3)
+        ]
+        p = Plan(
+            points=pts,
+            results=fake_results,
+            granules=granules,
+            point_granule_map={0: [0], 1: [1], 2: [2]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        # batch_size=1 → earthaccess.open called 3 times, once per granule
+        pc.matchup(
+            p,
+            geometry="grid",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            silent=True,
+            batch_size=1,
+        )
+
+        assert mock_ea.open.call_count == 3, (
+            "earthaccess.open should be called once per batch, not once for all granules"
+        )
+        # Each call should have received exactly 1 result (batch_size=1)
+        for call_args in open_call_args:
+            assert len(call_args) == 1, (
+                f"each open() call should pass 1 result for batch_size=1, got {len(call_args)}"
+            )
+        # The results passed to each call must be the per-batch results
+        assert open_call_args[0] == [fake_results[0]]
+        assert open_call_args[1] == [fake_results[1]]
+        assert open_call_args[2] == [fake_results[2]]
 
 
 # ---------------------------------------------------------------------------
