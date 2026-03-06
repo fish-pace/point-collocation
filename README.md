@@ -4,8 +4,8 @@ A helper package for doing lat/lon/time matchups using `earthaccess` and NASA Ea
 
 ## Documentation
 
-Full documentation is available at: **<https://fish-pace.github.io/earthaccess_matchup/>**
+Full documentation is available at: **<https://fish-pace.github.io/point-collocation/>**
 
-- [Installation](https://fish-pace.github.io/earthaccess_matchup/installation/)
-- [Quickstart](https://fish-pace.github.io/earthaccess_matchup/quickstart/)
-- [API Reference](https://fish-pace.github.io/earthaccess_matchup/api/)
+- [Installation](https://fish-pace.github.io/point-collocation/installation/)
+- [Quickstart](https://fish-pace.github.io/point-collocation/quickstart/)
+- [API Reference](https://fish-pace.github.io/point-collocation/api/)
