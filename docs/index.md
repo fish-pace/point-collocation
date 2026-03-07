@@ -15,6 +15,8 @@ Point-based lat/lon/time matchups against cloud-hosted NASA EarthData granules.
 pip install point-collocation[earthaccess]
 ```
 
+Available on [PyPI](https://pypi.org/project/point-collocation/).
+
 ## Minimal Example
 
 ```python

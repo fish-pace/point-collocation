@@ -11,7 +11,7 @@
 pip install point-collocation[earthaccess]
 ```
 
-This installs the core package plus [`earthaccess`](https://github.com/nsidc/earthaccess) for NASA Earthdata integration.
+This installs the core package plus [`earthaccess`](https://github.com/nsidc/earthaccess) for NASA Earthdata integration. The package is available on [PyPI](https://pypi.org/project/point-collocation/).
 
 ## L2 / Swath Data
 

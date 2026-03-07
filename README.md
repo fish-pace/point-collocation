@@ -9,3 +9,7 @@ Full documentation is available at: **<https://fish-pace.github.io/point-colloca
 - [Installation](https://fish-pace.github.io/point-collocation/installation/)
 - [Quickstart](https://fish-pace.github.io/point-collocation/quickstart/)
 - [API Reference](https://fish-pace.github.io/point-collocation/api/)
+
+## PyPI
+
+<https://pypi.org/project/point-collocation/>
