@@ -3448,8 +3448,64 @@ class TestXoakSpatialMethod:
         assert len(result) == 1
         assert not math.isnan(result.loc[0, "sst"])
 
+    def test_swath_matchup_multiple_points_same_granule_with_xoak(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple query points mapped to the same granule are processed via a single k-d tree."""
+        pytest.importorskip("xoak")  # skip if xoak not installed
 
-class TestSliceGridToPoints:
+        nc_path = str(tmp_path / "swath_multi.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=7)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        # Use two distinct swath pixels as query points.
+        lat0 = float(ds_swath["lat"].values[0, 0])
+        lon0 = float(ds_swath["lon"].values[0, 0])
+        lat1 = float(ds_swath["lat"].values[2, 3])
+        lon1 = float(ds_swath["lon"].values[2, 3])
+
+        pts = pd.DataFrame(
+            {
+                "lat": [lat0, lat1],
+                "lon": [lon0, lon1],
+                "time": pd.to_datetime(["2023-06-01T12:00:00", "2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/swath_multi.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0], 1: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            geometry="swath",
+            variables=["sst"],
+            spatial_method="xoak",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        # Both points should be matched; neither should be NaN.
+        assert "sst" in result.columns
+        assert len(result) == 2
+        assert not result["sst"].isna().any()
+
+
+
     """Unit tests for the _slice_grid_to_points helper."""
 
     def test_slices_ascending_coords(self) -> None:
