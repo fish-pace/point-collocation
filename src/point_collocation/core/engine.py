@@ -23,10 +23,12 @@ Future extension points
 
 from __future__ import annotations
 
+import gc
 import os
 import pathlib
 import time
-from typing import TYPE_CHECKING
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Generator
 
 import numpy as np
 import pandas as pd
@@ -305,24 +307,37 @@ def _check_geometry(
         )
 
 
+@contextmanager
 def _open_as_flat_dataset(
     file_obj: object,
     open_method: str,
     kwargs: dict,
-) -> "xr.Dataset":
-    """Open *file_obj* and return a flat :class:`xarray.Dataset`.
+) -> Generator["xr.Dataset", None, None]:
+    """Context manager that opens *file_obj* and yields a flat :class:`xarray.Dataset`.
 
     For ``open_method="dataset"``, wraps ``xr.open_dataset``.
     For ``open_method="datatree-merge"``, opens as a DataTree (using
-    ``xarray.open_datatree`` if available, or the ``datatree`` package)
-    and merges all leaves into a single Dataset.
+    ``xarray.open_datatree`` if available, or the ``datatree`` package),
+    merges all leaves into a single Dataset, and explicitly closes the
+    DataTree on exit so that all underlying file handles are released
+    promptly — without relying on Python's cyclic garbage collector.
     """
     if open_method == "dataset":
-        return xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
+        with xr.open_dataset(file_obj, **kwargs) as ds:  # type: ignore[arg-type]
+            yield ds
+        return
 
-    # datatree-merge: open as DataTree and merge groups.
+    # datatree-merge: open as DataTree, merge groups, close the tree on exit.
     dt = _open_datatree(file_obj, kwargs)
-    return _merge_datatree(dt)
+    try:
+        ds = _merge_datatree(dt)
+        yield ds
+    finally:
+        # Explicitly close the DataTree to release all underlying file handles.
+        # Without this the DataTree (which typically contains parent→child cycles)
+        # is not freed until Python's cyclic GC runs, causing the dataset's
+        # memory (~200 MB per swath granule) to accumulate across granules.
+        dt.close()
 
 
 def _open_datatree(file_obj: object, kwargs: dict) -> object:
@@ -536,17 +551,26 @@ def _execute_plan(
                         pt_lons = [float(plan.points.loc[idx]["lon"]) for idx in pt_indices]
                         ds = _slice_grid_to_points(ds, pt_lats, pt_lons, lat_name, lon_name)
 
-                    for pt_idx in pt_indices:
-                        row = plan.points.loc[pt_idx].to_dict()
-                        row["granule_id"] = gm.granule_id
-
-                        if spatial_method == "nearest":
+                    if spatial_method == "xoak":
+                        # Build the k-d tree index once for all points in this
+                        # granule instead of rebuilding it per point.  This
+                        # dramatically reduces memory pressure and speeds up
+                        # processing when a granule has many query points.
+                        rows_for_granule = []
+                        for pt_idx in pt_indices:
+                            row = plan.points.loc[pt_idx].to_dict()
+                            row["granule_id"] = gm.granule_id
+                            rows_for_granule.append(row)
+                        _extract_xoak_batch(ds, rows_for_granule, variables, lon_name, lat_name)
+                        output_rows.extend(rows_for_granule)
+                        batch_rows.extend(rows_for_granule)
+                    else:
+                        for pt_idx in pt_indices:
+                            row = plan.points.loc[pt_idx].to_dict()
+                            row["granule_id"] = gm.granule_id
                             _extract_nearest(ds, row, variables, lon_name, lat_name)
-                        else:
-                            _extract_xoak(ds, row, variables, lon_name, lat_name)
-
-                        output_rows.append(row)
-                        batch_rows.append(row)
+                            output_rows.append(row)
+                            batch_rows.append(row)
 
                     batch_matched_points += len(pt_indices)
 
@@ -584,8 +608,12 @@ def _execute_plan(
             batch_df.to_parquet(save_path / parquet_name, index=False)
 
         # Release all file handles for this batch so the OS can reclaim memory
-        # before we open the next batch.
+        # before we open the next batch.  The explicit gc.collect() call runs
+        # Python's cyclic garbage collector immediately, which is important for
+        # DataTree objects (which contain parent→child reference cycles) that
+        # would otherwise accumulate until the next scheduled GC pass.
         del opened_batch
+        gc.collect()
 
     if not output_rows:
         empty = plan.points.iloc[:0].copy()
@@ -801,3 +829,104 @@ def _extract_xoak(
     except Exception:
         for var in variables:
             row[var] = float("nan")
+
+
+def _extract_xoak_batch(
+    ds: xr.Dataset,
+    rows: list[dict],
+    variables: list[str],
+    lon_name: str,
+    lat_name: str,
+) -> None:
+    """Extract values for all *rows* using a single xoak k-d tree index.
+
+    Builds the k-d tree index **once** for the entire dataset, then queries
+    all points simultaneously.  This avoids the O(N) index-rebuild cost of
+    calling :func:`_extract_xoak` once per point and substantially reduces
+    peak memory when a granule has many query points.
+
+    Uses the ``xarray.indexes.NDPointIndex`` API with xoak's
+    ``SklearnKDTreeAdapter``.
+
+    Modifies each dict in *rows* in-place.
+    """
+    try:
+        from xoak.tree_adapters import SklearnKDTreeAdapter  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(
+            "The 'xoak' package is required for spatial_method='xoak'. "
+            "Install it with: pip install xoak scikit-learn"
+        ) from exc
+
+    if not rows:
+        return
+
+    # Compute coordinate arrays if they are lazy (dask) — building a k-d
+    # tree requires all values to be in memory.
+    # Use a shallow copy so we only copy metadata, not data arrays.
+    ds_work = ds.copy(deep=False)
+    if lat_name in ds_work.coords and hasattr(ds_work.coords[lat_name].data, "compute"):
+        ds_work[lat_name] = ds_work.coords[lat_name].compute()
+    if lon_name in ds_work.coords and hasattr(ds_work.coords[lon_name].data, "compute"):
+        ds_work[lon_name] = ds_work.coords[lon_name].compute()
+
+    # NDPointIndex requires lat and lon to share the same dimensions.  For
+    # regular grid data (1-D lat/lon with separate dimensions), broadcast both
+    # coordinates to a common 2-D meshgrid so that the joint index can be built.
+    lat_arr = ds_work.coords[lat_name] if lat_name in ds_work.coords else ds_work[lat_name]
+    lon_arr = ds_work.coords[lon_name] if lon_name in ds_work.coords else ds_work[lon_name]
+    if lat_arr.ndim == 1 and lon_arr.ndim == 1:
+        lat_2d, lon_2d = np.meshgrid(lat_arr.values, lon_arr.values, indexing="ij")
+        lat_dims = lat_arr.dims + lon_arr.dims  # e.g. ('lat', 'lon')
+        ds_work[lat_name] = xr.DataArray(lat_2d, dims=lat_dims)
+        ds_work[lon_name] = xr.DataArray(lon_2d, dims=lat_dims)
+
+    # Build the NDPointIndex once for all query points.
+    indexed_ds = ds_work.set_xindex(
+        [lat_name, lon_name],
+        xr.indexes.NDPointIndex,
+        tree_adapter_cls=SklearnKDTreeAdapter,
+    )
+
+    # Build the target dataset with all query points at once.
+    lats = [row["lat"] for row in rows]
+    lons = [row["lon"] for row in rows]
+    target = xr.Dataset(
+        {
+            lat_name: xr.DataArray(lats),
+            lon_name: xr.DataArray(lons),
+        }
+    )
+    # The auto-generated dimension name for the query coordinate array
+    # (e.g. 'dim_0') is used to index individual results per point.
+    query_dim = target[lat_name].dims[0]
+
+    try:
+        selected = indexed_ds.sel(
+            {lat_name: target[lat_name], lon_name: target[lon_name]},
+            method="nearest",
+        )
+        for var in variables:
+            try:
+                var_data = selected[var]
+                for i, row in enumerate(rows):
+                    # Extract the i-th query point.  After sel() the query
+                    # dimension is prepended; squeeze removes any remaining
+                    # size-1 spatial dims so extra dims (e.g. wavelength) are
+                    # kept intact.
+                    point_data = var_data.isel({query_dim: i}).squeeze()
+                    if point_data.ndim == 0:
+                        row[var] = float(point_data)
+                    else:
+                        # Additional dimensions (e.g. wavelength) — expand
+                        # into coord-keyed columns (Rrs_346, Rrs_348, …).
+                        row[var] = float("nan")  # placeholder; removed later
+                        for coord_val, val in point_data.to_series().items():
+                            row[f"{var}_{int(coord_val)}"] = float(val)
+            except Exception:
+                for r in rows:
+                    r[var] = float("nan")
+    except Exception:
+        for var in variables:
+            for r in rows:
+                r[var] = float("nan")
