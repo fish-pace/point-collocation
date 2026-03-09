@@ -527,6 +527,15 @@ def _execute_plan(
                             "Use plan.show_variables() to inspect the dataset."
                         )
 
+                    # For grid+xoak, pre-slice the dataset to the spatial extent
+                    # of the query points before building the k-d tree.  A global
+                    # granule with only a few scattered points would otherwise cause
+                    # xoak to index the entire global grid, which is very slow.
+                    if spatial_method == "xoak" and geometry == "grid":
+                        pt_lats = [float(plan.points.loc[idx]["lat"]) for idx in pt_indices]
+                        pt_lons = [float(plan.points.loc[idx]["lon"]) for idx in pt_indices]
+                        ds = _slice_grid_to_points(ds, pt_lats, pt_lons, lat_name, lon_name)
+
                     for pt_idx in pt_indices:
                         row = plan.points.loc[pt_idx].to_dict()
                         row["granule_id"] = gm.granule_id
@@ -595,6 +604,86 @@ def _execute_plan(
             df = df.drop(columns=[var])
 
     return df
+
+
+def _slice_grid_to_points(
+    ds: xr.Dataset,
+    lats: list[float],
+    lons: list[float],
+    lat_name: str,
+    lon_name: str,
+    buffer_deg: float = 1.0,
+) -> xr.Dataset:
+    """Slice a regular-grid dataset to the smallest region covering *lats*/*lons*.
+
+    When ``geometry='grid'`` and ``spatial_method='xoak'``, building a k-d tree
+    over an entire global granule is very slow if only a few points need to be
+    matched.  This function slices the dataset to a padded bounding box around
+    the query points so xoak indexes the minimum required region.
+
+    Only applies to datasets with 1-D coordinate arrays (regular grids). Returns
+    *ds* unchanged for 2-D coordinates or if the resulting slice would be empty.
+
+    Parameters
+    ----------
+    ds:
+        The dataset to slice.
+    lats, lons:
+        Latitudes and longitudes of the query points.
+    lat_name, lon_name:
+        Coordinate names detected by :func:`_find_geoloc_pair`.
+    buffer_deg:
+        Extra degrees to pad the bounding box on each side (default 1°).
+        Ensures at least one grid cell surrounds each query point.
+
+    Returns
+    -------
+    xr.Dataset
+        A lazy slice of *ds* covering the padded bounding box, or *ds* unchanged
+        if the coordinates are not 1-D or the slice would be empty.
+    """
+    lat_coord = ds.coords.get(lat_name) if lat_name in ds.coords else ds.get(lat_name)
+    lon_coord = ds.coords.get(lon_name) if lon_name in ds.coords else ds.get(lon_name)
+
+    if lat_coord is None or lon_coord is None:
+        return ds
+    if lat_coord.ndim != 1 or lon_coord.ndim != 1:
+        return ds
+
+    lat_min_data = float(lat_coord.min())
+    lat_max_data = float(lat_coord.max())
+    lon_min_data = float(lon_coord.min())
+    lon_max_data = float(lon_coord.max())
+
+    min_lat = max(min(lats) - buffer_deg, lat_min_data)
+    max_lat = min(max(lats) + buffer_deg, lat_max_data)
+    min_lon = max(min(lons) - buffer_deg, lon_min_data)
+    max_lon = min(max(lons) + buffer_deg, lon_max_data)
+
+    # xarray slice() is order-aware: if the coordinate is stored in descending
+    # order (e.g. 90→-90), the larger bound must come first.
+    lat_vals = lat_coord.values
+    if len(lat_vals) > 1 and lat_vals[0] > lat_vals[-1]:
+        lat_slice = slice(max_lat, min_lat)
+    else:
+        lat_slice = slice(min_lat, max_lat)
+
+    lon_vals = lon_coord.values
+    if len(lon_vals) > 1 and lon_vals[0] > lon_vals[-1]:
+        lon_slice = slice(max_lon, min_lon)
+    else:
+        lon_slice = slice(min_lon, max_lon)
+
+    sliced = ds.sel({lat_name: lat_slice, lon_name: lon_slice})
+
+    # Guard against an empty slice (e.g., all query points fall outside the
+    # coordinate range, or the grid is coarser than the buffer).
+    lat_dim = lat_coord.dims[0]
+    lon_dim = lon_coord.dims[0]
+    if sliced.sizes.get(lat_dim, 0) == 0 or sliced.sizes.get(lon_dim, 0) == 0:
+        return ds
+
+    return sliced
 
 
 def _extract_nearest(

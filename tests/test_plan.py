@@ -3396,6 +3396,179 @@ class TestXoakSpatialMethod:
         assert len(result) == 1
         assert not math.isnan(result.loc[0, "sst"])
 
+    def test_grid_matchup_xoak_global_granule_returns_nearest_value(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """geometry='grid' + xoak on a global granule slices correctly and returns a value."""
+        pytest.importorskip("xoak")  # skip if xoak not installed
+
+        # Large global grid (181 lats × 361 lons) with the query point near centre.
+        lats = list(range(-90, 91))        # integers -90, -89, …, 90
+        lons = list(range(-180, 181))      # integers -180, -179, …, 180
+        nc_path = str(tmp_path / "global_grid.nc")
+        _make_l3_dataset(lats, lons, seed=99).to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        # Query a single point at (lat=10, lon=20).
+        pts = pd.DataFrame(
+            {
+                "lat": [10.0],
+                "lon": [20.0],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/global_grid.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            geometry="grid",
+            variables=["sst"],
+            spatial_method="xoak",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert "sst" in result.columns
+        assert len(result) == 1
+        assert not math.isnan(result.loc[0, "sst"])
+
+
+class TestSliceGridToPoints:
+    """Unit tests for the _slice_grid_to_points helper."""
+
+    def test_slices_ascending_coords(self) -> None:
+        """Dataset with ascending lat/lon is sliced to the point bounding box + buffer."""
+        from point_collocation.core.engine import _slice_grid_to_points
+
+        lats = list(range(-90, 91))
+        lons = list(range(-180, 181))
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], np.zeros((len(lats), len(lons))))},
+            coords={"lat": lats, "lon": lons},
+        )
+
+        sliced = _slice_grid_to_points(ds, [10.0], [20.0], "lat", "lon", buffer_deg=2.0)
+
+        # The slice should cover [8, 12] lat and [18, 22] lon (within 2° buffer).
+        assert float(sliced["lat"].min()) >= 8.0
+        assert float(sliced["lat"].max()) <= 12.0
+        assert float(sliced["lon"].min()) >= 18.0
+        assert float(sliced["lon"].max()) <= 22.0
+        # Original dataset should be much larger.
+        assert sliced.sizes["lat"] < ds.sizes["lat"]
+        assert sliced.sizes["lon"] < ds.sizes["lon"]
+
+    def test_slices_descending_lat_coords(self) -> None:
+        """Dataset with descending lat (90→-90) is sliced correctly."""
+        from point_collocation.core.engine import _slice_grid_to_points
+
+        lats = list(range(90, -91, -1))   # integers 90, 89, …, -90 (descending)
+        lons = list(range(-180, 181))
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], np.zeros((len(lats), len(lons))))},
+            coords={"lat": lats, "lon": lons},
+        )
+
+        sliced = _slice_grid_to_points(ds, [5.0], [0.0], "lat", "lon", buffer_deg=1.0)
+
+        assert sliced.sizes["lat"] > 0
+        assert sliced.sizes["lon"] > 0
+        assert sliced.sizes["lat"] < ds.sizes["lat"]
+
+    def test_single_point_uses_buffer(self) -> None:
+        """A single query point still produces a non-empty slice thanks to the buffer."""
+        from point_collocation.core.engine import _slice_grid_to_points
+
+        lats = list(range(-90, 91))
+        lons = list(range(-180, 181))
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], np.zeros((len(lats), len(lons))))},
+            coords={"lat": lats, "lon": lons},
+        )
+
+        sliced = _slice_grid_to_points(ds, [0.0], [0.0], "lat", "lon", buffer_deg=1.0)
+
+        # 1° buffer each side → at least 3 lat values and 3 lon values.
+        assert sliced.sizes["lat"] >= 3
+        assert sliced.sizes["lon"] >= 3
+
+    def test_empty_slice_falls_back_to_full_dataset(self) -> None:
+        """If the buffered box is outside the grid, the full dataset is returned."""
+        from point_collocation.core.engine import _slice_grid_to_points
+
+        lats = [0.0, 1.0, 2.0]
+        lons = [0.0, 1.0, 2.0]
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], np.zeros((3, 3)))},
+            coords={"lat": lats, "lon": lons},
+        )
+
+        # Query point far outside the dataset range.
+        sliced = _slice_grid_to_points(ds, [50.0], [50.0], "lat", "lon", buffer_deg=0.5)
+
+        # Should fall back to the full dataset unchanged.
+        assert sliced.sizes["lat"] == ds.sizes["lat"]
+        assert sliced.sizes["lon"] == ds.sizes["lon"]
+
+    def test_2d_coords_returns_unchanged(self) -> None:
+        """2-D (swath-style) coordinates are not sliced."""
+        from point_collocation.core.engine import _slice_grid_to_points
+
+        lat_2d = np.array([[0.0, 1.0], [2.0, 3.0]])
+        lon_2d = np.array([[10.0, 11.0], [12.0, 13.0]])
+        ds = xr.Dataset(
+            {"sst": (["nrows", "ncols"], np.zeros((2, 2)))},
+            coords={
+                "lat": (["nrows", "ncols"], lat_2d),
+                "lon": (["nrows", "ncols"], lon_2d),
+            },
+        )
+
+        sliced = _slice_grid_to_points(ds, [1.0], [11.0], "lat", "lon")
+
+        # 2-D coords → no slicing; sizes must be unchanged.
+        assert sliced.sizes == ds.sizes
+
+    def test_multiple_points_uses_union_bbox(self) -> None:
+        """Multiple query points: slice covers the union bounding box."""
+        from point_collocation.core.engine import _slice_grid_to_points
+
+        lats = list(range(-90, 91))
+        lons = list(range(-180, 181))
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], np.zeros((len(lats), len(lons))))},
+            coords={"lat": lats, "lon": lons},
+        )
+
+        # Two points that are far apart; the slice must cover both.
+        sliced = _slice_grid_to_points(
+            ds, [-30.0, 30.0], [-60.0, 60.0], "lat", "lon", buffer_deg=1.0
+        )
+
+        assert float(sliced["lat"].min()) <= -30.0
+        assert float(sliced["lat"].max()) >= 30.0
+        assert float(sliced["lon"].min()) <= -60.0
+        assert float(sliced["lon"].max()) >= 60.0
+        # Still smaller than the full global grid.
+        assert sliced.sizes["lat"] < ds.sizes["lat"]
+        assert sliced.sizes["lon"] < ds.sizes["lon"]
+
 
 class TestShowVariablesLayout:
     """Tests for plan.show_variables(geometry=...) with both open methods."""
