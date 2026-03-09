@@ -69,7 +69,7 @@ ds = ds.sel(
     lon=slice(-162, -160),
     lat=slice(2, 0)
 )
-ds.to_netcdf("/home/jovyan/earthaccess_matchup/examples/fixtures/pace_l3_sample.nc")
+ds.to_netcdf("/home/jovyan/point-collocation/examples/fixtures/pace_l3_sample.nc")
 
 import earthaccess
 import xarray as xr
@@ -85,4 +85,4 @@ dt_small = dt.isel(number_of_bands=slice(0,10),
         number_of_reflective_bands=slice(0,10),
         number_of_lines=slice(0,10),
         pixels_per_line=slice(0,10))
-dt_small.to_netcdf("/home/jovyan/earthaccess_matchup/examples/fixtures/pace_l2_sample.nc")
+dt_small.to_netcdf("/home/jovyan/point-collocation/examples/fixtures/pace_l2_sample.nc")
