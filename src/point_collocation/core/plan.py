@@ -601,7 +601,8 @@ def plan(
         supported.
     source_kwargs:
         Keyword arguments forwarded to ``earthaccess.search_data()``.
-        Must contain at least ``"short_name"``.
+        Must contain at least one of ``"short_name"``, ``"collection_id"``,
+        or ``"doi"``.
     time_buffer:
         Extra temporal margin when matching a point to a granule.  A
         point at time *t* matches a granule whose coverage is
@@ -620,7 +621,8 @@ def plan(
     ------
     ValueError
         If *points* is missing required columns, *data_source* is not
-        recognised, or ``source_kwargs`` does not contain ``"short_name"``.
+        recognised, or ``source_kwargs`` does not contain at least one of
+        ``"short_name"``, ``"collection_id"``, or ``"doi"``.
     ImportError
         If the ``earthaccess`` package is not installed.
     """
@@ -735,7 +737,8 @@ def _search_earthaccess(
     ImportError
         If ``earthaccess`` is not installed.
     ValueError
-        If ``source_kwargs`` does not contain ``"short_name"``.
+        If ``source_kwargs`` does not contain at least one of ``"short_name"``,
+        ``"collection_id"``, or ``"doi"``.
     """
     try:
         import earthaccess  # type: ignore[import-untyped]
@@ -746,9 +749,11 @@ def _search_earthaccess(
         ) from exc
 
     base_kwargs: dict[str, Any] = dict(source_kwargs or {})
-    if "short_name" not in base_kwargs:
+    _COLLECTION_ID_KEYS = {"short_name", "collection_id", "doi"}
+    if not _COLLECTION_ID_KEYS.intersection(base_kwargs):
         raise ValueError(
-            "'source_kwargs' must contain 'short_name' when data_source='earthaccess'."
+            "'source_kwargs' must contain at least one of 'short_name', "
+            "'collection_id', or 'doi' when data_source='earthaccess'."
         )
 
     # Extract granule_name for post-search filtering (faster than passing to search_data).
