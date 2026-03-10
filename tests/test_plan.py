@@ -3425,10 +3425,36 @@ class TestGeolocDetection:
             _find_geoloc_pair(ds)
 
     def test_ambiguous_geoloc_raises(self) -> None:
-        """Multiple recognised pairs should raise with all pairs listed."""
+        """Multiple recognised pairs should raise with all pairs listed.
+
+        Uses a dataset where cf_xarray cannot resolve the ambiguity (no CF
+        attributes, and variable names are not recognised CF standard names).
+        """
         from point_collocation.core.engine import _find_geoloc_pair
 
-        # Has both (lon, lat) and (longitude, latitude)
+        # Has both (lon, lat) and (Longitude, Latitude) — neither pair uses the
+        # exact CF standard name spellings that cf_xarray can resolve by name,
+        # so the name-based fallback detects two pairs and raises.
+        ds = xr.Dataset(
+            coords={
+                "lon": [0.0],
+                "lat": [0.0],
+                "Longitude": [0.0],
+                "Latitude": [0.0],
+            }
+        )
+        with pytest.raises(ValueError, match="ambiguous geolocation variables"):
+            _find_geoloc_pair(ds)
+
+    def test_lon_lat_plus_longitude_latitude_resolves_via_cf(self) -> None:
+        """When cf_xarray is installed, (lon,lat)+(longitude,latitude) resolves.
+
+        Without cf_xarray this would be ambiguous, but cf_xarray correctly
+        picks the CF standard-name pair ``(longitude, latitude)``.
+        """
+        cf_xarray = pytest.importorskip("cf_xarray")  # noqa: F841
+        from point_collocation.core.engine import _find_geoloc_pair
+
         ds = xr.Dataset(
             coords={
                 "lon": [0.0],
@@ -3437,7 +3463,111 @@ class TestGeolocDetection:
                 "latitude": [0.0],
             }
         )
+        lon_name, lat_name = _find_geoloc_pair(ds)
+        assert lon_name == "longitude"
+        assert lat_name == "latitude"
+
+
+class TestGeolocDetectionCfXarray:
+    """Tests for _find_geoloc_pair() using cf_xarray CF-convention detection."""
+
+    def test_finds_via_standard_name(self) -> None:
+        pytest.importorskip("cf_xarray")
+        from point_collocation.core.engine import _find_geoloc_pair
+
+        ds = xr.Dataset(
+            coords={
+                "myX": xr.DataArray(
+                    [0.0], attrs={"standard_name": "longitude", "units": "degrees_east"}
+                ),
+                "myY": xr.DataArray(
+                    [0.0], attrs={"standard_name": "latitude", "units": "degrees_north"}
+                ),
+            }
+        )
+        lon_name, lat_name = _find_geoloc_pair(ds)
+        assert lon_name == "myX"
+        assert lat_name == "myY"
+
+    def test_finds_via_units(self) -> None:
+        pytest.importorskip("cf_xarray")
+        from point_collocation.core.engine import _find_geoloc_pair
+
+        ds = xr.Dataset(
+            coords={
+                "mylon": xr.DataArray([0.0], attrs={"units": "degrees_east"}),
+                "mylat": xr.DataArray([0.0], attrs={"units": "degrees_north"}),
+            }
+        )
+        lon_name, lat_name = _find_geoloc_pair(ds)
+        assert lon_name == "mylon"
+        assert lat_name == "mylat"
+
+    def test_finds_via_long_name(self) -> None:
+        pytest.importorskip("cf_xarray")
+        from point_collocation.core.engine import _find_geoloc_pair
+
+        ds = xr.Dataset(
+            coords={
+                "x": xr.DataArray([0.0], attrs={"long_name": "longitude"}),
+                "y": xr.DataArray([0.0], attrs={"long_name": "latitude"}),
+            }
+        )
+        lon_name, lat_name = _find_geoloc_pair(ds)
+        assert lon_name == "x"
+        assert lat_name == "y"
+
+    def test_finds_cf_attrs_in_data_vars(self) -> None:
+        """CF-detected geoloc vars stored as data_vars (not coords) should be found."""
+        pytest.importorskip("cf_xarray")
+        from point_collocation.core.engine import _find_geoloc_pair
+
+        ds = xr.Dataset(
+            {
+                "nav_lon": xr.DataArray(
+                    [[0.0, 1.0]],
+                    dims=["y", "x"],
+                    attrs={"standard_name": "longitude"},
+                ),
+                "nav_lat": xr.DataArray(
+                    [[0.0, 0.0]],
+                    dims=["y", "x"],
+                    attrs={"standard_name": "latitude"},
+                ),
+                "sst": xr.DataArray([[25.0, 26.0]], dims=["y", "x"]),
+            }
+        )
+        lon_name, lat_name = _find_geoloc_pair(ds)
+        assert lon_name == "nav_lon"
+        assert lat_name == "nav_lat"
+
+    def test_cf_ambiguous_raises(self) -> None:
+        """Multiple CF-detected longitude vars should raise ambiguous error."""
+        pytest.importorskip("cf_xarray")
+        from point_collocation.core.engine import _find_geoloc_pair
+
+        ds = xr.Dataset(
+            coords={
+                "lon1": xr.DataArray([0.0], attrs={"standard_name": "longitude"}),
+                "lon2": xr.DataArray([0.0], attrs={"standard_name": "longitude"}),
+                "lat1": xr.DataArray([0.0], attrs={"standard_name": "latitude"}),
+            }
+        )
         with pytest.raises(ValueError, match="ambiguous geolocation variables"):
+            _find_geoloc_pair(ds)
+
+    def test_cf_partial_detection_raises(self) -> None:
+        """CF detects longitude but not latitude — should raise 'no geolocation'."""
+        pytest.importorskip("cf_xarray")
+        from point_collocation.core.engine import _find_geoloc_pair
+
+        ds = xr.Dataset(
+            coords={
+                "myX": xr.DataArray([0.0], attrs={"standard_name": "longitude"}),
+                "temperature": xr.DataArray([20.0]),
+            }
+        )
+        with pytest.raises(ValueError, match="no geolocation variables found"):
             _find_geoloc_pair(ds)
 
 

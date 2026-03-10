@@ -18,12 +18,14 @@ dependencies = [
 [project.optional-dependencies]
 earthaccess = ["earthaccess>=0.9.0"]
 swath = ["xoak>=0.2.0", "scikit-learn>=1.0.0"]
+cf = ["cf-xarray>=0.7.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
     "ruff",
     "mypy",
     "pyarrow>=10.0",
+    "cf-xarray>=0.7.0",
 ]
 docs = [
     "mkdocs>=1.5,<2.0",
@@ -32,7 +34,7 @@ docs = [
     "nbconvert>=7.0",
 ]
 all = [
-    "point-collocation[earthaccess,swath,dev]",
+    "point-collocation[earthaccess,swath,cf,dev]",
 ]
 
 [project.urls]

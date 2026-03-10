@@ -37,8 +37,9 @@ import xarray as xr
 if TYPE_CHECKING:
     from point_collocation.core.plan import Plan
 
-# Geolocation name pairs (case-sensitive, tried in order).
-# Each element is (lon_name, lat_name).
+# Geolocation name pairs used as a fallback when cf_xarray is not installed or
+# when the dataset lacks CF-convention attributes (standard_name, units, etc.).
+# Each element is (lon_name, lat_name), tried in order (case-sensitive).
 _GEOLOC_PAIRS = [
     ("lon", "lat"),
     ("longitude", "latitude"),
@@ -245,11 +246,44 @@ def matchup(
 # ---------------------------------------------------------------------------
 
 
+def _cf_geoloc_names(ds: xr.Dataset, key: str) -> list[str]:
+    """Return variable names that match a CF *key* (e.g. ``"longitude"``) in *ds*.
+
+    Searches both ``ds.coords`` and ``ds.data_vars`` via the ``cf_xarray``
+    accessor.  Returns an empty list when ``cf_xarray`` is not installed or
+    when no variables match the key.
+
+    Parameters
+    ----------
+    ds:
+        Dataset to inspect.
+    key:
+        CF coordinate key, e.g. ``"longitude"`` or ``"latitude"``.
+    """
+    try:
+        import cf_xarray  # noqa: F401  (registers the .cf accessor)
+    except ImportError:
+        return []
+
+    try:
+        matched = ds.cf[[key]]
+    except KeyError:
+        return []
+
+    return list(matched.coords) + list(matched.data_vars)
+
+
 def _find_geoloc_pair(ds: xr.Dataset) -> tuple[str, str]:
     """Find exactly one ``(lon_name, lat_name)`` pair in *ds*.
 
-    Searches both ``ds.coords`` and ``ds.data_vars`` for each pair in
-    :data:`_GEOLOC_PAIRS`.
+    Detection strategy
+    ------------------
+    1. **cf_xarray** (primary, if installed): inspects CF-convention attributes
+       such as ``standard_name``, ``units``, and ``long_name`` in both
+       ``ds.coords`` and ``ds.data_vars``.
+    2. **Name-based fallback**: if ``cf_xarray`` is not installed or the
+       dataset lacks CF attributes, searches ``ds.coords`` and ``ds.data_vars``
+       for each ``(lon_name, lat_name)`` pair in :data:`_GEOLOC_PAIRS`.
 
     Returns
     -------
@@ -262,6 +296,27 @@ def _find_geoloc_pair(ds: xr.Dataset) -> tuple[str, str]:
         If zero pairs are found ("no geolocation variables found") or
         more than one pair is found ("ambiguous geolocation variables").
     """
+    # --- primary: cf_xarray (CF-conventions-aware) ---
+    lon_names = _cf_geoloc_names(ds, "longitude")
+    lat_names = _cf_geoloc_names(ds, "latitude")
+
+    if lon_names or lat_names:
+        # cf_xarray found at least one candidate — commit to its results.
+        if not lon_names or not lat_names:
+            raise ValueError(
+                "no geolocation variables found. "
+                f"cf_xarray detected longitude={lon_names}, latitude={lat_names}; "
+                "expected exactly one variable for each."
+            )
+        if len(lon_names) > 1 or len(lat_names) > 1:
+            raise ValueError(
+                f"ambiguous geolocation variables; "
+                f"cf_xarray detected longitude={lon_names}, latitude={lat_names}. "
+                "Rename or drop the extra coordinates before running matchup."
+            )
+        return lon_names[0], lat_names[0]
+
+    # --- fallback: name-based search (no cf_xarray or no CF attributes) ---
     found: list[tuple[str, str]] = []
     for lon_name, lat_name in _GEOLOC_PAIRS:
         has_lon = lon_name in ds.coords or lon_name in ds.data_vars

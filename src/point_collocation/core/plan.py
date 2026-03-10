@@ -409,7 +409,7 @@ class Plan:
             If the plan contains no granules.
         """
         from point_collocation.core.engine import (
-            _GEOLOC_PAIRS,
+            _find_geoloc_pair,
             _VALID_GEOMETRIES,
             _VALID_OPEN_METHODS,
             _merge_datatree,
@@ -472,30 +472,25 @@ class Plan:
             print(f"Variables  : {list(ds_flat.data_vars)}")
 
         # Geolocation detection results.
-        found_pairs: list[tuple[str, str]] = []
-        for lon_name, lat_name in _GEOLOC_PAIRS:
-            has_lon = lon_name in ds_flat.coords or lon_name in ds_flat.data_vars
-            has_lat = lat_name in ds_flat.coords or lat_name in ds_flat.data_vars
-            if has_lon and has_lat:
-                found_pairs.append((lon_name, lat_name))
-
-        if len(found_pairs) == 0:
-            alt_open_method = "datatree-merge" if open_method == "dataset" else "dataset"
-            alt = f"plan.show_variables(geometry={geometry!r}, open_method={alt_open_method!r})"
-            print(
-                f"\nGeolocation: NONE detected with open_method={open_method!r}. "
-                f"Try {alt}."
-            )
-        elif len(found_pairs) == 1:
-            lon_n, lat_n = found_pairs[0]
+        try:
+            lon_n, lat_n = _find_geoloc_pair(ds_flat)
             lon_var = ds_flat.coords[lon_n] if lon_n in ds_flat.coords else ds_flat[lon_n]
             lat_var = ds_flat.coords[lat_n] if lat_n in ds_flat.coords else ds_flat[lat_n]
             print(
                 f"\nGeolocation: ({lon_n!r}, {lat_n!r}) — "
                 f"lon dims={tuple(lon_var.dims)}, lat dims={tuple(lat_var.dims)}"
             )
-        else:
-            print(f"\nGeolocation: ambiguous — detected pairs: {found_pairs}")
+        except ValueError as exc:
+            msg = str(exc)
+            if "no geolocation variables found" in msg:
+                alt_open_method = "datatree-merge" if open_method == "dataset" else "dataset"
+                alt = f"plan.show_variables(geometry={geometry!r}, open_method={alt_open_method!r})"
+                print(
+                    f"\nGeolocation: NONE detected with open_method={open_method!r}. "
+                    f"Try {alt}."
+                )
+            else:
+                print(f"\nGeolocation: {msg}")
 
         # For datatree-merge, print group details at the end.
         if open_method == "datatree-merge":
