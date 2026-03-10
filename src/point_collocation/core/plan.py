@@ -596,7 +596,7 @@ def plan(
         supported.
     source_kwargs:
         Keyword arguments forwarded to ``earthaccess.search_data()``.
-        Must contain at least one of ``"short_name"``, ``"collection_id"``,
+        Must contain at least one of ``"short_name"``, ``"concept_id"``,
         or ``"doi"``.
     time_buffer:
         Extra temporal margin when matching a point to a granule.  A
@@ -617,7 +617,7 @@ def plan(
     ValueError
         If *points* is missing required columns, *data_source* is not
         recognised, or ``source_kwargs`` does not contain at least one of
-        ``"short_name"``, ``"collection_id"``, or ``"doi"``.
+        ``"short_name"``, ``"concept_id"``, or ``"doi"``.
     ImportError
         If the ``earthaccess`` package is not installed.
     """
