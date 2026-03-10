@@ -672,14 +672,34 @@ class TestPlanPublicApi:
         with pytest.raises(ValueError, match="time"):
             plan(pts, source_kwargs={"short_name": "TEST"})
 
-    def test_plan_raises_without_short_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_plan_raises_without_collection_identifier(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_ea = MagicMock()
         monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
         pts = pd.DataFrame(
             {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
         )
-        with pytest.raises(ValueError, match="short_name"):
+        with pytest.raises(ValueError, match="short_name.*collection_id.*doi"):
             plan(pts, source_kwargs={})
+
+    def test_plan_accepts_collection_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_ea = MagicMock()
+        mock_ea.search_data.return_value = []
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        result = plan(pts, source_kwargs={"collection_id": "C1234567890-PODAAC"})
+        assert isinstance(result, Plan)
+
+    def test_plan_accepts_doi(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_ea = MagicMock()
+        mock_ea.search_data.return_value = []
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        result = plan(pts, source_kwargs={"doi": "10.5067/PACE/OCI/L3M/RRS/2.0"})
+        assert isinstance(result, Plan)
 
 
 class TestPlanMapping:
