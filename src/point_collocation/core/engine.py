@@ -813,17 +813,16 @@ def _execute_plan(
                 # batch is finished, causing peak memory to scale with
                 # batch_size rather than staying constant at ~1 granule.
                 _safe_close(file_obj)
-                # For datatree-merge (swath), DataTree nodes hold
-                # parent↔child reference cycles that Python's reference
-                # counting cannot collect.  Without a GC call here, all
-                # DataTree objects for an entire batch accumulate in memory
+                # xarray datasets opened with dask (chunks={}) and DataTree
+                # nodes both hold internal reference cycles that Python's
+                # reference counting cannot free.  Without a GC call here,
+                # these objects accumulate in memory for an entire batch
                 # before the single gc.collect() at the end of the batch
                 # runs — causing retained memory to scale with batch_size
                 # rather than staying constant at ~1 granule.  Calling
                 # gc.collect() once per granule keeps peak memory bounded
-                # regardless of batch_size.
-                if open_method == "datatree-merge":
-                    gc.collect()
+                # regardless of batch_size and open_method.
+                gc.collect()
 
             granules_processed += 1
 
