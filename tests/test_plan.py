@@ -2171,6 +2171,94 @@ class TestMatchupWithPlan:
             "the entire batch, causing memory to scale with batch_size."
         )
 
+    def test_grid_gc_called_per_granule_not_per_batch(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """gc.collect() must be called once per granule for dataset (grid).
+
+        With batch_size larger than the number of granules, all granules fall
+        into one batch.  xarray datasets opened with dask (chunks={}) hold
+        internal reference cycles that Python's reference counting cannot free;
+        they accumulate until gc.collect() runs.  The fix calls gc.collect()
+        after *each* granule (not just after each batch) so that peak memory is
+        bounded regardless of batch_size.
+        """
+        n = 3
+        nc_files = []
+        for i in range(n):
+            nc_path = str(tmp_path / f"grid{i}.nc")
+            _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=i).to_netcdf(nc_path)
+            nc_files.append(nc_path)
+
+        mock_ea = MagicMock()
+
+        def fake_open(results, **kwargs):
+            return [nc_files[plan.results.index(r)] for r in results]
+
+        mock_ea.open.side_effect = fake_open
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        fake_results = [object(), object(), object()]
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0] * n,
+                "lon": [0.0] * n,
+                "time": pd.to_datetime(
+                    [f"2023-06-0{i+1}T12:00:00" for i in range(n)]
+                ),
+            }
+        )
+        granules = [
+            GranuleMeta(
+                granule_id=f"https://example.com/grid{i}.nc",
+                begin=pd.Timestamp(f"2023-06-0{i+1}T00:00:00Z"),
+                end=pd.Timestamp(f"2023-06-0{i+1}T23:59:59Z"),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=i,
+            )
+            for i in range(n)
+        ]
+        plan = Plan(
+            points=pts,
+            results=fake_results,
+            granules=granules,
+            point_granule_map={0: [0], 1: [1], 2: [2]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        gc_call_count = 0
+
+        original_gc_collect = __import__("gc").collect
+
+        def counting_gc_collect(*args, **kwargs):
+            nonlocal gc_call_count
+            gc_call_count += 1
+            return original_gc_collect(*args, **kwargs)
+
+        import point_collocation.core.engine as engine_mod
+
+        monkeypatch.setattr(engine_mod.gc, "collect", counting_gc_collect)
+
+        pc.matchup(
+            plan,
+            geometry="grid",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            silent=True,
+            batch_size=1000,  # all 3 granules in one batch
+        )
+
+        # gc.collect() should have been called at least once per granule
+        # (n per-granule calls inside the inner loop) plus once per batch
+        # (1 call at the end of the batch loop) = n + 1 total.
+        assert gc_call_count >= n, (
+            f"gc.collect() should be called at least {n} times (once per granule) "
+            f"for dataset (grid), but was called {gc_call_count} times. "
+            "Without per-granule GC, xarray+dask reference cycles accumulate across "
+            "the entire batch, causing memory to scale with batch_size."
+        )
+
 
 # ---------------------------------------------------------------------------
 # pc_id, granule_lat/lon/time columns and new defaults
