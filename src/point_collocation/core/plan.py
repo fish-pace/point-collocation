@@ -219,6 +219,7 @@ class Plan:
             _build_effective_open_kwargs,
             _merge_datatree_with_spec,
             _normalize_open_method,
+            _open_and_merge_dataset_groups,
             _open_datatree_fn,
         )
 
@@ -263,7 +264,12 @@ class Plan:
             # lifecycle is managed by the caller.  Auto tries the fast path
             # only; if the caller needs datatree fallback they should use
             # open_method="datatree-merge" explicitly.
-            ds = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+            merge = spec.get("merge")
+            if merge is not None:
+                # Dataset-based group merge: open each group and merge.
+                ds = _open_and_merge_dataset_groups(file_obj, spec, effective_kwargs)
+            else:
+                ds = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
             try:
                 ds, _, _ = _apply_coords(ds, spec)
             except ValueError:
@@ -307,6 +313,7 @@ class Plan:
             _build_effective_open_kwargs,
             _merge_datatree_with_spec,
             _normalize_open_method,
+            _open_and_merge_dataset_groups,
             _open_as_flat_dataset,
             _open_datatree_fn,
         )
@@ -346,9 +353,21 @@ class Plan:
             return xr.concat(merged_datasets, dim="granule")
 
         if xarray_open in ("dataset", "auto"):
-            # For dataset mode, use xr.open_mfdataset across all file objects.
-            # For auto, fall back to the multi-file open (dataset path).
+            # For dataset mode with merge, open each granule's groups as
+            # separate datasets and merge them, then concatenate all granules
+            # along a new "granule" dimension.
+            # Without merge, use xr.open_mfdataset for simplicity.
             effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
+            merge = spec.get("merge")
+            if merge is not None:
+                merged_datasets = []
+                for file_obj in file_objs:
+                    merged_datasets.append(
+                        _open_and_merge_dataset_groups(file_obj, spec, effective_kwargs)
+                    )
+                if not merged_datasets:
+                    return xr.Dataset()
+                return xr.concat(merged_datasets, dim="granule")
             return xr.open_mfdataset(file_objs, **effective_kwargs)  # type: ignore[arg-type]
 
         raise ValueError(
@@ -363,17 +382,19 @@ class Plan:
         self,
         open_method: str | dict | None = None,
         open_dataset_kwargs: dict[str, Any] | None = None,
-    ) -> xr.Dataset | object:
-        """Open the first granule and print its dimensions and variables.
+    ) -> None:
+        """Print the first granule's groups, dimensions, and variables.
 
-        Opens the first result in the plan, prints the dataset dimensions,
-        data variable names, and geolocation detection results.  This lets
-        users discover available variable names before running a full
-        :func:`~point_collocation.matchup`.
+        Uses h5py for fast metadata inspection (no data loading) when the
+        file is an HDF5/NetCDF4 file.  Falls back to xarray when h5py is
+        unavailable or the file format is not HDF5.
 
-        Returns the opened xarray Dataset or DataTree so that interactive
-        environments (e.g. Jupyter) display the full structure using xarray's
-        collapsible repr.
+        Prints a concise summary for each group: group name, variable names
+        with dimension names, dimension sizes, and geolocation detection
+        results.
+
+        To obtain the full xarray representation use
+        ``plan.open_dataset(plan[0])`` instead.
 
         Parameters
         ----------
@@ -382,15 +403,10 @@ class Plan:
             dict spec as :func:`~point_collocation.matchup`.  Defaults to
             ``"auto"``.
         open_dataset_kwargs:
-            Keyword arguments forwarded to the xarray open function.
+            Keyword arguments forwarded to the xarray open function when
+            the h5py fast path is unavailable.
             ``chunks`` defaults to ``{}`` (lazy/dask loading).  ``engine``
             defaults to ``"h5netcdf"`` when not specified.
-
-        Returns
-        -------
-        xr.Dataset or DataTree
-            The opened DataTree (when ``xarray_open="datatree"``) or merged
-            Dataset, available for further inspection.
 
         Raises
         ------
@@ -398,10 +414,13 @@ class Plan:
             If the plan contains no granules.
         """
         from point_collocation.core._open_method import (
+            _GEOLOC_PAIRS,
             _apply_coords,
             _build_effective_open_kwargs,
+            _h5py_file_info,
             _merge_datatree_with_spec,
             _normalize_open_method,
+            _open_and_merge_dataset_groups,
             _open_datatree_fn,
             _resolve_auto_spec,
         )
@@ -432,32 +451,79 @@ class Plan:
 
         effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
 
-        # For "auto" mode, probe the first granule to resolve which open path
-        # to use (dataset vs. datatree).  This ensures that the reported
-        # open_method reflects what was actually applied and that the datatree
-        # fallback is exercised when the fast dataset path lacks geolocation.
-        # If both paths fail to detect lat/lon, fall back to the dataset path
-        # for display purposes so that dimensions/variables are still shown.
+        # Print the spec summary.
+        display_spec = {**spec, "open_kwargs": effective_kwargs}
+        print(f"open_method: {display_spec!r}")
+
+        # ---------------------------------------------------------------
+        # Fast path: use h5py for metadata inspection (no data loading).
+        # ---------------------------------------------------------------
+        h5_info = _h5py_file_info(file_obj)
+        if h5_info is not None:
+            # Collect all variable names for geolocation detection.
+            all_var_names: set[str] = set()
+            for _group_path, vars_dict in h5_info:
+                all_var_names.update(vars_dict.keys())
+
+            for group_path, vars_dict in h5_info:
+                print(f"\nGroup {group_path}")
+                # Collect dimension sizes from variable shapes.
+                dim_sizes: dict[str, int] = {}
+                for vinfo in vars_dict.values():
+                    for dim, size in zip(vinfo["dims"], vinfo["shape"]):
+                        if dim and dim != "?":
+                            dim_sizes.setdefault(dim, size)
+                if dim_sizes:
+                    print(f"  Dimensions: {dim_sizes}")
+
+                if vars_dict:
+                    var_strs = [
+                        f"{vname}{vinfo['dims']}"
+                        for vname, vinfo in vars_dict.items()
+                    ]
+                    print(f"  Variables:  {', '.join(var_strs)}")
+
+            # Geolocation detection from variable names.
+            geo_pairs = [
+                (lon_n, lat_n)
+                for lon_n, lat_n in _GEOLOC_PAIRS
+                if lon_n in all_var_names and lat_n in all_var_names
+            ]
+            if geo_pairs:
+                lon_n, lat_n = geo_pairs[0]
+                print(f"\nGeolocation: ({lon_n!r}, {lat_n!r}) detected")
+            else:
+                coords_val = spec.get("coords", "auto")
+                set_coords_val = spec.get("set_coords", True)
+                print(
+                    f"\nGeolocation: NONE detected with "
+                    f"'coords': {coords_val!r}, 'set_coords': {set_coords_val!r}. "
+                    "Try open_method='datatree-merge' or specify "
+                    "open_method={'coords': {'lat': '...', 'lon': '...'}}."
+                )
+            return
+
+        # ---------------------------------------------------------------
+        # Fallback: use xarray to inspect the file.
+        # ---------------------------------------------------------------
+        # For "auto" mode, probe the first granule to resolve which open
+        # path to use (dataset vs. datatree).
         if xarray_open == "auto":
             try:
                 spec = _resolve_auto_spec(file_obj, spec)
                 xarray_open = spec["xarray_open"]
                 effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
             except ValueError:
-                # Neither path could identify lat/lon — use dataset path for
-                # display; the geolocation section below will print "NONE".
                 xarray_open = "dataset"
                 spec = {**spec, "xarray_open": "dataset"}
 
-        # Print the spec with the effective open_kwargs (defaults applied) so
-        # users see exactly what will be passed to the xarray open function.
-        display_spec = {**spec, "open_kwargs": effective_kwargs}
-        print(f"open_method: {display_spec!r}")
-
         dt = None
+        merge = spec.get("merge")
         if xarray_open == "datatree":
             dt = _open_datatree_fn(file_obj, effective_kwargs)
             ds_flat = _merge_datatree_with_spec(dt, spec)
+        elif xarray_open == "dataset" and merge is not None:
+            ds_flat = _open_and_merge_dataset_groups(file_obj, spec, effective_kwargs)
         else:
             ds_flat = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
 
@@ -487,10 +553,6 @@ class Plan:
             else:
                 print(f"\nGeolocation: {msg}")
 
-        # Return the DataTree (or merged Dataset) so that interactive environments
-        # (e.g. Jupyter) display it using xarray's collapsible repr instead of
-        # printing a verbose manual dump.
-        return dt if dt is not None else ds_flat
 
     # ------------------------------------------------------------------
     # Summary

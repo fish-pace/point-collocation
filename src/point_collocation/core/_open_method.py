@@ -254,6 +254,9 @@ def _validate_and_fill_spec(spec: dict) -> dict:
     if xarray_open == "datatree":
         result.setdefault("merge", "all")
         result.setdefault("merge_kwargs", {})
+    elif xarray_open == "dataset" and "merge" in result:
+        # Allow merge_kwargs alongside merge for the dataset path too.
+        result.setdefault("merge_kwargs", {})
 
     return result
 
@@ -438,6 +441,226 @@ def _apply_coords(ds: xr.Dataset, spec: dict) -> tuple[xr.Dataset, str, str]:
         f"coords={coords!r} is not valid. "
         "Must be 'auto', a list of variable names, or a dict with 'lat'/'lon' keys."
     )
+
+
+# ---------------------------------------------------------------------------
+# Dataset-based group merge helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_groups_from_h5py(file_obj: object) -> list[str]:
+    """Return all group paths (including root ``'/'``) in an HDF5 file.
+
+    Uses h5py to traverse the file hierarchy without loading any data.
+
+    Parameters
+    ----------
+    file_obj:
+        A file path (str/Path) or a seekable file-like object pointing to an
+        HDF5/NetCDF4 file.
+
+    Returns
+    -------
+    list[str]
+        List of group paths such as ``['/', '/monthly', '/monthly/extra']``.
+
+    Raises
+    ------
+    ImportError
+        If h5py is not installed.
+    """
+    try:
+        import h5py  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(
+            "merge='all' with xarray_open='dataset' requires h5py. "
+            "Install it with: pip install h5py"
+        ) from exc
+
+    groups: list[str] = ["/"]
+
+    def _collect(name: str, obj: object) -> None:
+        if isinstance(obj, h5py.Group):
+            groups.append("/" + name)
+
+    with h5py.File(file_obj, "r") as h:  # type: ignore[arg-type]
+        h.visititems(_collect)
+
+    return groups
+
+
+def _merge_opened_datasets(datasets: list[xr.Dataset], spec: dict) -> xr.Dataset:
+    """Merge a list of already-open datasets using *spec*'s ``merge_kwargs``.
+
+    Parameters
+    ----------
+    datasets:
+        Open :class:`xarray.Dataset` objects to merge.
+    spec:
+        Normalized open_method dict spec.
+
+    Returns
+    -------
+    xr.Dataset
+        Merged dataset (empty if *datasets* is empty).
+    """
+    merge_kwargs: dict = spec.get("merge_kwargs", {})
+    if not datasets:
+        return xr.Dataset()
+    if len(datasets) == 1:
+        return datasets[0]
+    effective_merge_kwargs = {"compat": "override", "join": "outer", **merge_kwargs}
+    return xr.merge(datasets, **effective_merge_kwargs)
+
+
+def _open_and_merge_dataset_groups(
+    file_obj: object,
+    spec: dict,
+    effective_kwargs: dict,
+) -> xr.Dataset:
+    """Open HDF5/NetCDF4 groups as :class:`xarray.Dataset` objects and merge.
+
+    This is the *dataset* analogue of :func:`_merge_datatree_with_spec`: it
+    opens each group specified by ``spec['merge']`` using
+    ``xr.open_dataset(..., group=path)``, merges the results, and returns the
+    merged dataset.  Source datasets are closed after merging (mirroring the
+    DataTree path in :func:`_merge_datatree_with_spec`).
+
+    Parameters
+    ----------
+    file_obj:
+        File path or seekable file-like object.
+    spec:
+        Normalized open_method dict spec.  ``spec['merge']`` must be
+        ``'all'``, ``'root'``, or a list of group paths.
+    effective_kwargs:
+        Effective open kwargs (with defaults applied) to pass to
+        ``xr.open_dataset``.
+
+    Returns
+    -------
+    xr.Dataset
+        Merged flat dataset.
+
+    Raises
+    ------
+    ImportError
+        If ``merge='all'`` is requested but h5py is not installed.
+    """
+    merge = spec.get("merge")
+
+    if merge == "root":
+        group_paths: list[str] = ["/"]
+    elif merge == "all":
+        group_paths = _get_groups_from_h5py(file_obj)
+    elif isinstance(merge, list):
+        group_paths = list(merge)
+    else:
+        # No merge requested — open the root dataset directly.
+        return xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+
+    opened: list[xr.Dataset] = []
+    try:
+        for path in group_paths:
+            kwargs = {**effective_kwargs, "group": path}
+            try:
+                ds = xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
+                if ds.data_vars:
+                    opened.append(ds)
+                else:
+                    ds.close()
+            except Exception:
+                pass  # Skip unreadable groups silently (mirrors datatree merge behaviour)
+
+        return _merge_opened_datasets(opened, spec)
+    finally:
+        # Mirror the DataTree path: close sources after merging.
+        for ds in opened:
+            try:
+                ds.close()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# h5py-based file structure inspection (for show_variables)
+# ---------------------------------------------------------------------------
+
+
+def _h5py_file_info(
+    file_obj: object,
+) -> list[tuple[str, dict[str, dict]]] | None:
+    """Return file structure metadata using h5py (without loading data).
+
+    Parameters
+    ----------
+    file_obj:
+        A file path (str/Path) or a seekable file-like object.
+
+    Returns
+    -------
+    list of (group_path, vars_dict) or None
+        Each entry is ``(group_path, vars_dict)`` where *vars_dict* maps
+        variable names to ``{'dims': tuple[str, ...], 'shape': tuple[int, ...]}``.
+        Returns ``None`` if h5py is not installed or cannot open the file.
+    """
+    try:
+        import h5py  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+
+    try:
+        h = h5py.File(file_obj, "r")  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+    def _dim_names(item: object, h5file: object) -> tuple[str, ...]:
+        """Return dimension names for an h5py Dataset item."""
+        dim_list = item.attrs.get("DIMENSION_LIST")  # type: ignore[union-attr]
+        if dim_list is None:
+            return tuple(f"dim_{i}" for i in range(item.ndim))  # type: ignore[union-attr]
+        dims: list[str] = []
+        for refs in dim_list:
+            if len(refs) > 0:
+                try:
+                    dim_ds = h5file[refs[0]]  # type: ignore[index]
+                    dims.append(dim_ds.name.split("/")[-1])
+                except Exception:
+                    dims.append("?")
+            else:
+                dims.append("?")
+        return tuple(dims)
+
+    def _group_vars(group: object, h5file: object) -> dict[str, dict]:
+        vars_info: dict[str, dict] = {}
+        for name, obj in group.items():  # type: ignore[union-attr]
+            if isinstance(obj, h5py.Dataset):
+                vars_info[name] = {
+                    "dims": _dim_names(obj, h5file),
+                    "shape": obj.shape,  # type: ignore[union-attr]
+                }
+        return vars_info
+
+    result: list[tuple[str, dict[str, dict]]] = []
+    try:
+        with h:
+            root_vars = _group_vars(h, h)
+            result.append(("/", root_vars))
+
+            sub_groups: list[tuple[str, object]] = []
+
+            def _visit(name: str, obj: object) -> None:
+                if isinstance(obj, h5py.Group):
+                    sub_groups.append(("/" + name, obj))
+
+            h.visititems(_visit)
+            for group_path, group in sub_groups:
+                gvars = _group_vars(group, h)
+                result.append((group_path, gvars))
+    except Exception:
+        return None
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -709,9 +932,45 @@ def _open_as_flat_dataset(
     effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
 
     if xarray_open == "dataset":
-        with xr.open_dataset(file_obj, **effective_kwargs) as ds:  # type: ignore[arg-type]
-            ds, lon_name, lat_name = _apply_coords(ds, spec)
-            yield (ds, lon_name, lat_name)
+        merge = spec.get("merge")
+        if merge is not None:
+            # Dataset-based group merge: open each group and keep sources alive
+            # while the caller is using the merged dataset.
+            if merge == "root":
+                group_paths: list[str] = ["/"]
+            elif merge == "all":
+                group_paths = _get_groups_from_h5py(file_obj)
+            elif isinstance(merge, list):
+                group_paths = list(merge)
+            else:
+                raise ValueError(
+                    f"spec['merge']={merge!r} is not valid for xarray_open='dataset'. "
+                    "Must be 'all', 'root', or a list of group paths."
+                )
+            opened: list[xr.Dataset] = []
+            try:
+                for path in group_paths:
+                    kwargs = {**effective_kwargs, "group": path}
+                    try:
+                        ds_grp = xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
+                        if ds_grp.data_vars:
+                            opened.append(ds_grp)
+                        else:
+                            ds_grp.close()
+                    except Exception:
+                        pass  # Skip unreadable groups silently (mirrors datatree merge behaviour)
+                ds_merged, lon_name, lat_name = _apply_coords(ds_merged, spec)
+                yield (ds_merged, lon_name, lat_name)
+            finally:
+                for ds_src in opened:
+                    try:
+                        ds_src.close()
+                    except Exception:
+                        pass
+        else:
+            with xr.open_dataset(file_obj, **effective_kwargs) as ds:  # type: ignore[arg-type]
+                ds, lon_name, lat_name = _apply_coords(ds, spec)
+                yield (ds, lon_name, lat_name)
 
     elif xarray_open == "datatree":
         dt = _open_datatree_fn(file_obj, effective_kwargs)
