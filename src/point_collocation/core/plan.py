@@ -577,8 +577,8 @@ class Plan:
                 else:
                     ds_detail = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
                 print(f"\nDataset Detail:\n{ds_detail}")
-            except Exception:
-                pass  # Skip Dataset Detail if xarray open fails
+            except Exception as exc:
+                print(f"\nDataset Detail: unavailable ({exc})")
 
             return
 
