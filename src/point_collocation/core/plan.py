@@ -429,7 +429,10 @@ class Plan:
                 xarray_open = "dataset"
                 spec = {**spec, "xarray_open": "dataset"}
 
-        print(f"open_method  : {spec!r}")
+        # Print the spec with the effective open_kwargs (defaults applied) so
+        # users see exactly what will be passed to the xarray open function.
+        display_spec = {**spec, "open_kwargs": effective_kwargs}
+        print(f"open_method  : {display_spec!r}")
 
         dt = None
         if xarray_open == "datatree":
@@ -438,8 +441,8 @@ class Plan:
         else:
             ds_flat = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
 
-        print(f"Dimensions : {dict(ds_flat.sizes)}")
-        print(f"Variables  : {list(ds_flat.data_vars)}")
+        print(f"\nDimensions : {dict(ds_flat.sizes)}")
+        print(f"\nVariables  : {list(ds_flat.data_vars)}")
 
         # Geolocation detection results.
         try:
@@ -454,7 +457,7 @@ class Plan:
             msg = str(exc)
             if "no geolocation variables found" in msg:
                 print(
-                    f"\nGeolocation: NONE detected with open_method={spec!r}. "
+                    f"\nGeolocation: NONE detected with open_method={display_spec!r}. "
                     "Try open_method='datatree-merge' or specify "
                     "open_method={'coords': {'lat': '...', 'lon': '...'}}."
                 )
