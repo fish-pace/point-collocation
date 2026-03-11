@@ -12,7 +12,7 @@ What it shows
 -------------
 * Building a minimal ``df_points`` DataFrame manually.
 * Using ``pc.plan()`` to search for granules.
-* Calling ``pc.matchup(plan, geometry="grid", ...)`` for L3/gridded data.
+* Calling ``pc.matchup(plan, ...)`` for L3/gridded data.
 * Inspecting the returned DataFrame.
 * Requires earthdata authentication (``earthaccess.login()``).
 """
@@ -65,15 +65,13 @@ plan = pc.plan(
 )
 
 # Inspect available variables before running the full matchup.
-plan.show_variables(geometry="grid")
+plan.show_variables()
 
 # ---------------------------------------------------------------------------
 # 3. Run matchup.
-#    geometry="grid" — L3/gridded data with 1-D lat/lon coordinates.
 # ---------------------------------------------------------------------------
 result = pc.matchup(
     plan,
-    geometry="grid",
     variables=["sst", "chlor_a"],
 )
 

@@ -69,7 +69,6 @@ plan = pc.plan(
 
 result = pc.matchup(
     plan,
-    geometry="grid",
     variables=["Rrs"],
 )
 

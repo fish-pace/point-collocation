@@ -13,8 +13,7 @@ What it shows
 * Using ``pc.plan()`` with ``data_source='earthaccess'``.
 * Calling ``plan.show_variables()`` to preview dimensions, variables, and
   geolocation detection results before committing to a full extraction.
-* Running ``pc.matchup(plan, geometry="grid", variables=[...])`` for
-  L3/gridded data.
+* Running ``pc.matchup(plan, variables=[...])`` for L3/gridded data.
 * Requires earthdata authentication (``earthaccess.login()``).
 """
 
@@ -59,17 +58,15 @@ plan = pc.plan(
     },
 )
 
-print("Available variables (geometry='grid'):")
-plan.show_variables(geometry="grid")
+print("Available variables:")
+plan.show_variables()
 print()
 
 # ---------------------------------------------------------------------------
 # 3. Run matchup.
-#    geometry="grid" — L3/gridded data with 1-D lat/lon coordinates.
 # ---------------------------------------------------------------------------
 result = pc.matchup(
     plan,
-    geometry="grid",
     variables=["Rrs"],
 )
 
