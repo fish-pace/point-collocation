@@ -215,6 +215,7 @@ class Plan:
             (e.g. ``ds.close()`` or ``with plan.open_dataset(...) as ds:``).
         """
         from point_collocation.core._open_method import (
+            _apply_coords,
             _build_effective_open_kwargs,
             _merge_datatree_with_spec,
             _normalize_open_method,
@@ -247,17 +248,27 @@ class Plan:
         if xarray_open == "datatree":
             dt = _open_datatree_fn(file_obj, effective_kwargs)
             try:
-                return _merge_datatree_with_spec(dt, spec)
+                ds = _merge_datatree_with_spec(dt, spec)
             finally:
                 if hasattr(dt, "close"):
                     dt.close()
+            try:
+                ds, _, _ = _apply_coords(ds, spec)
+            except ValueError:
+                pass  # coords not found; return merged dataset as-is
+            return ds
 
         if xarray_open in ("dataset", "auto"):
             # For the dataset and auto paths, return an open dataset whose
             # lifecycle is managed by the caller.  Auto tries the fast path
             # only; if the caller needs datatree fallback they should use
             # open_method="datatree-merge" explicitly.
-            return xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+            ds = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+            try:
+                ds, _, _ = _apply_coords(ds, spec)
+            except ValueError:
+                pass  # coords not found; return dataset as-is
+            return ds
 
         raise ValueError(
             f"open_method['xarray_open']={xarray_open!r} is not valid for open_dataset."
