@@ -432,7 +432,7 @@ class Plan:
         # Print the spec with the effective open_kwargs (defaults applied) so
         # users see exactly what will be passed to the xarray open function.
         display_spec = {**spec, "open_kwargs": effective_kwargs}
-        print(f"open_method  : {display_spec!r}")
+        print(f"open_method: {display_spec!r}")
 
         dt = None
         if xarray_open == "datatree":
@@ -441,8 +441,8 @@ class Plan:
         else:
             ds_flat = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
 
-        print(f"\nDimensions : {dict(ds_flat.sizes)}")
-        print(f"\nVariables  : {list(ds_flat.data_vars)}")
+        print(f"\nDimensions: {dict(ds_flat.sizes)}")
+        print(f"\nVariables: {list(ds_flat.data_vars)}")
 
         # Geolocation detection results.
         try:
@@ -476,8 +476,8 @@ class Plan:
                         dims_str = dict(ds_node.sizes)
                         vars_list = list(ds_node.data_vars)
                         print(f"  {path or '/'}")
-                        print(f"    Dimensions : {dims_str}")
-                        print(f"    Variables  : {vars_list}")
+                        print(f"    Dimensions: {dims_str}")
+                        print(f"    Variables: {vars_list}")
                 if hasattr(dt, "close"):
                     dt.close()
             except AttributeError:
@@ -488,8 +488,8 @@ class Plan:
                         dims_str = dict(ds_node.sizes)
                         vars_list = list(ds_node.data_vars)
                         print(f"  {path or '/'}")
-                        print(f"    Dimensions : {dims_str}")
-                        print(f"    Variables  : {vars_list}")
+                        print(f"    Dimensions: {dims_str}")
+                        print(f"    Variables: {vars_list}")
                 if hasattr(dt, "close"):
                     dt.close()
 
