@@ -39,7 +39,7 @@ p = pc.plan(
 )
 p.summary()
 
-out = pc.matchup(p, geometry="grid", variables=["Rrs"])
+out = pc.matchup(p, variables=["Rrs"])
 print(out)
 ```
 
