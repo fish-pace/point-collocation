@@ -3148,6 +3148,257 @@ class TestPlanOpenDataset:
         assert "sst" in ds
 
 
+# ---------------------------------------------------------------------------
+# Helper: create a grouped NetCDF4 file (HDF5 with subgroups)
+# ---------------------------------------------------------------------------
+
+def _make_grouped_nc(path: str) -> None:
+    """Write a NetCDF4 file with root and /monthly groups for testing.
+
+    Root '/':      coordinate datasets ``lat``, ``lon``
+    Group '/monthly':  variable ``sst`` (lat, lon) plus ``lat``, ``lon`` coords
+    """
+    import h5py
+
+    with h5py.File(path, "w") as h:
+        lat_data = np.array([-90.0, 0.0, 90.0])
+        lon_data = np.array([-180.0, 0.0, 180.0])
+
+        lat_ds = h.create_dataset("lat", data=lat_data)
+        lat_ds.attrs["CLASS"] = np.bytes_("DIMENSION_SCALE")
+        lat_ds.attrs["NAME"] = np.bytes_("lat")
+
+        lon_ds = h.create_dataset("lon", data=lon_data)
+        lon_ds.attrs["CLASS"] = np.bytes_("DIMENSION_SCALE")
+        lon_ds.attrs["NAME"] = np.bytes_("lon")
+
+        monthly = h.create_group("monthly")
+        lat_m = monthly.create_dataset("lat", data=lat_data)
+        lat_m.attrs["CLASS"] = np.bytes_("DIMENSION_SCALE")
+        lat_m.attrs["NAME"] = np.bytes_("lat")
+        lon_m = monthly.create_dataset("lon", data=lon_data)
+        lon_m.attrs["CLASS"] = np.bytes_("DIMENSION_SCALE")
+        lon_m.attrs["NAME"] = np.bytes_("lon")
+        monthly.create_dataset("sst", data=np.ones((3, 3), dtype=np.float32))
+
+
+# ---------------------------------------------------------------------------
+# Tests for dataset-based merge (Task 1) and merge_kwargs (Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestDatasetMerge:
+    """Tests for merge with xarray_open='dataset'."""
+
+    def _make_plan(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, nc_paths: list) -> Plan:
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = nc_paths
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        return Plan(
+            points=pts,
+            results=[object() for _ in nc_paths],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+    def test_open_dataset_with_merge_list_opens_groups(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_dataset with merge=['/', '/monthly'] merges groups via xr.open_dataset."""
+        nc_path = str(tmp_path / "grouped.nc")
+        _make_grouped_nc(nc_path)
+        p = self._make_plan(tmp_path, monkeypatch, [nc_path])
+        open_method = {
+            "xarray_open": "dataset",
+            "merge": ["/", "/monthly"],
+            "open_kwargs": {"engine": "h5netcdf", "phony_dims": "sort"},
+            "coords": {"lat": "lat", "lon": "lon"},
+        }
+        ds = p.open_dataset(p[0], open_method=open_method)
+        assert isinstance(ds, xr.Dataset)
+        assert "sst" in ds
+
+    def test_open_dataset_with_merge_all_uses_h5py(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_dataset with merge='all' discovers groups via h5py."""
+        nc_path = str(tmp_path / "grouped.nc")
+        _make_grouped_nc(nc_path)
+        p = self._make_plan(tmp_path, monkeypatch, [nc_path])
+        open_method = {
+            "xarray_open": "dataset",
+            "merge": "all",
+            "open_kwargs": {"engine": "h5netcdf", "phony_dims": "sort"},
+            "coords": {"lat": "lat", "lon": "lon"},
+        }
+        ds = p.open_dataset(p[0], open_method=open_method)
+        assert isinstance(ds, xr.Dataset)
+        assert "sst" in ds
+
+    def test_open_mfdataset_with_merge_list_concatenates(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_mfdataset with dataset+merge=['/', '/monthly'] merges and concatenates."""
+        nc_a = str(tmp_path / "a.nc")
+        nc_b = str(tmp_path / "b.nc")
+        _make_grouped_nc(nc_a)
+        _make_grouped_nc(nc_b)
+        p = self._make_plan(tmp_path, monkeypatch, [nc_a, nc_b])
+        open_method = {
+            "xarray_open": "dataset",
+            "merge": ["/", "/monthly"],
+            "open_kwargs": {"engine": "h5netcdf", "phony_dims": "sort"},
+            "coords": {"lat": "lat", "lon": "lon"},
+        }
+        ds = p.open_mfdataset(p.results, open_method=open_method)
+        assert isinstance(ds, xr.Dataset)
+        assert ds.sizes["granule"] == 2
+        assert "sst" in ds
+
+    def test_merge_kwargs_accepted_in_dataset_spec(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """merge_kwargs in open_method dict is accepted alongside merge for dataset path."""
+        nc_path = str(tmp_path / "grouped.nc")
+        _make_grouped_nc(nc_path)
+        p = self._make_plan(tmp_path, monkeypatch, [nc_path])
+        open_method = {
+            "xarray_open": "dataset",
+            "merge": ["/monthly"],
+            "merge_kwargs": {},
+            "open_kwargs": {"engine": "h5netcdf", "phony_dims": "sort"},
+            "coords": {"lat": "lat", "lon": "lon"},
+        }
+        ds = p.open_dataset(p[0], open_method=open_method)
+        assert isinstance(ds, xr.Dataset)
+        assert "sst" in ds
+
+    def test_open_dataset_lazy_access_after_merge_does_not_raise(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Dask lazy arrays from open_dataset+merge can be computed without 'file closed' error."""
+        nc_path = str(tmp_path / "grouped.nc")
+        _make_grouped_nc(nc_path)
+        p = self._make_plan(tmp_path, monkeypatch, [nc_path])
+        open_method = {
+            "xarray_open": "dataset",
+            "merge": ["/", "/monthly"],
+            "open_kwargs": {"engine": "h5netcdf", "phony_dims": "sort", "chunks": {}},
+            "coords": {"lat": "lat", "lon": "lon"},
+        }
+        ds = p.open_dataset(p[0], open_method=open_method)
+        assert isinstance(ds, xr.Dataset)
+        # Computing dask arrays must not raise RuntimeError: file closed
+        sst_values = ds["sst"].values
+        assert sst_values is not None
+
+
+# ---------------------------------------------------------------------------
+# Tests for show_variables with h5py fast path (Task 3)
+# ---------------------------------------------------------------------------
+
+
+class TestShowVariablesH5py:
+    """Tests for show_variables() using h5py fast path."""
+
+    def _make_plan(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, nc_path: str) -> Plan:
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        return Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+    def test_show_variables_returns_none(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """show_variables() returns None (print-only; use open_dataset for xarray repr)."""
+        nc_path = str(tmp_path / "flat.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(
+            nc_path, engine="netcdf4"
+        )
+        p = self._make_plan(tmp_path, monkeypatch, nc_path)
+        assert p.show_variables() is None
+
+    def test_show_variables_flat_file_prints_dims_vars_geo(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """show_variables() for a flat NetCDF4 prints Dimensions, Variables, Geolocation, Dataset Detail."""
+        nc_path = str(tmp_path / "flat.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(
+            nc_path, engine="netcdf4"
+        )
+        p = self._make_plan(tmp_path, monkeypatch, nc_path)
+        p.show_variables()
+        captured = capsys.readouterr()
+        assert "Dimensions" in captured.out
+        assert "Variables" in captured.out
+        assert "sst" in captured.out
+        assert "Geolocation" in captured.out
+        assert "lon" in captured.out
+        assert "Dataset Detail" in captured.out
+
+    def test_show_variables_grouped_file_prints_groups_and_sst(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """show_variables() with grouped HDF5 prints group info and sst variable."""
+        nc_path = str(tmp_path / "grouped.nc")
+        _make_grouped_nc(nc_path)
+        p = self._make_plan(tmp_path, monkeypatch, nc_path)
+        p.show_variables()
+        captured = capsys.readouterr()
+        assert "Group /" in captured.out
+        assert "sst" in captured.out
+        assert "Geolocation" in captured.out
+        assert "lon" in captured.out
+        # The flat merged summary should also be present
+        assert "Dimensions:" in captured.out
+        assert "Variables:" in captured.out
+        # Dataset Detail section should appear
+        assert "Dataset Detail" in captured.out
+
+    def test_show_variables_coords_dict_detects_geolocation(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """show_variables() with coords={'lat': 'lat', 'lon': 'lon'} detects geolocation."""
+        nc_path = str(tmp_path / "grouped.nc")
+        _make_grouped_nc(nc_path)
+        p = self._make_plan(tmp_path, monkeypatch, nc_path)
+        open_method = {
+            "xarray_open": "dataset",
+            "merge": ["/", "/monthly"],
+            "open_kwargs": {"engine": "h5netcdf", "phony_dims": "sort"},
+            "coords": {"lat": "lat", "lon": "lon"},
+        }
+        p.show_variables(open_method=open_method)
+        captured = capsys.readouterr()
+        assert "Geolocation" in captured.out
+        # Should detect geolocation (not NONE) since lat and lon exist in the file
+        assert "NONE" not in captured.out
+
+
 class TestPlanShowVariables:
     def test_show_variables_prints_dims_and_vars(
         self,
