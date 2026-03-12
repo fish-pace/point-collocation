@@ -4,7 +4,7 @@
 
 * Create a plan for files to use `pc.plan()`
 * Print the plan to check it `plan.summary()`
-* Do the plan and get matchups for variables `pc.matchup(plan, geometry='grid', variables=['var'])`
+* Do the plan and get matchups for variables `pc.matchup(plan, variables=['var'])`
 
 ## Prerequisite -- Login to EarthData
 
@@ -16,14 +16,10 @@ import earthaccess
 earthaccess.login()
 ```
 
-    /Users/eli.holmes/Documents/GitHub/point-collocation/.micromamba/envs/point-collocation-dev/lib/python3.14/site-packages/tqdm/auto.py:21: TqdmWarning: IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
-      from .autonotebook import tqdm as notebook_tqdm
 
 
 
-
-
-    <earthaccess.auth.Auth at 0x11212d7f0>
+    <earthaccess.auth.Auth at 0x7f6b2c60c920>
 
 
 
@@ -31,12 +27,13 @@ earthaccess.login()
 
 
 ```python
-from pathlib import Path
 import pandas as pd
-
-HERE = Path.cwd()
-POINTS_CSV = HERE / "fixtures" / "points.csv"
-df_points = pd.read_csv(POINTS_CSV)  # lat, lon, date columns
+url = (
+    "https://raw.githubusercontent.com/"
+    "fish-pace/point-collocation/main/"
+    "examples/fixtures/points.csv"
+)
+df_points = pd.read_csv(url)
 print(len(df_points))
 df_points.head()
 ```
@@ -124,8 +121,8 @@ plan = pc.plan(
 )
 ```
 
-    CPU times: user 1.82 s, sys: 72.5 ms, total: 1.89 s
-    Wall time: 8.25 s
+    CPU times: user 217 ms, sys: 20.5 ms, total: 237 ms
+    Wall time: 10.9 s
 
 
 
@@ -176,8 +173,8 @@ plan = pc.plan(
 )
 ```
 
-    CPU times: user 93.2 ms, sys: 32.5 ms, total: 126 ms
-    Wall time: 3.25 s
+    CPU times: user 53.5 ms, sys: 344 μs, total: 53.8 ms
+    Wall time: 3.45 s
 
 
 
@@ -212,7 +209,7 @@ This will open one file and show us the variables. We want 'Rrs' in this case.
 
 
 ```python
-plan.show_variables(geometry="grid")
+plan.show_variables()
 ```
 
     geometry     : 'grid'
@@ -225,16 +222,16 @@ plan.show_variables(geometry="grid")
 
 ## Get the matchups using our plan
 
-Let's start with 100 points since 595 might take awhile.
+Let's start with 100 points since 595 might take awhile. The lat, lon, and time for the matching granules is added as a column. `pc_id` is the point id/row from the data you are matching. This is added in case there are multiple granules (files) per data point.
 
 
 ```python
 %%time
-res = pc.matchup(plan[0:100], geometry="grid", variables=["Rrs"])
+res = pc.matchup(plan[0:100], variables=["Rrs"])
 ```
 
-    CPU times: user 7.94 s, sys: 1.58 s, total: 9.52 s
-    Wall time: 46.7 s
+    CPU times: user 12.3 s, sys: 992 ms, total: 13.3 s
+    Wall time: 18.8 s
 
 
 
@@ -266,13 +263,13 @@ res.head()
       <th>lat</th>
       <th>lon</th>
       <th>time</th>
+      <th>pc_id</th>
       <th>granule_id</th>
+      <th>granule_time</th>
+      <th>granule_lat</th>
+      <th>granule_lon</th>
       <th>Rrs_346</th>
       <th>Rrs_348</th>
-      <th>Rrs_351</th>
-      <th>Rrs_353</th>
-      <th>Rrs_356</th>
-      <th>Rrs_358</th>
       <th>...</th>
       <th>Rrs_706</th>
       <th>Rrs_707</th>
@@ -292,13 +289,13 @@ res.head()
       <td>27.3835</td>
       <td>-82.7375</td>
       <td>2024-06-13 12:00:00</td>
+      <td>0</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
+      <td>2024-06-15 23:59:59+00:00</td>
+      <td>27.395832</td>
+      <td>-82.729164</td>
       <td>0.004034</td>
       <td>0.004070</td>
-      <td>0.004170</td>
-      <td>0.004278</td>
-      <td>0.004462</td>
-      <td>0.004604</td>
       <td>...</td>
       <td>0.000224</td>
       <td>0.000202</td>
@@ -316,13 +313,13 @@ res.head()
       <td>27.1190</td>
       <td>-82.7125</td>
       <td>2024-06-14 12:00:00</td>
+      <td>1</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
+      <td>2024-06-15 23:59:59+00:00</td>
+      <td>27.104164</td>
+      <td>-82.729164</td>
       <td>0.004562</td>
       <td>0.004616</td>
-      <td>0.004700</td>
-      <td>0.004692</td>
-      <td>0.004806</td>
-      <td>0.005070</td>
       <td>...</td>
       <td>0.000108</td>
       <td>0.000094</td>
@@ -340,13 +337,13 @@ res.head()
       <td>26.9435</td>
       <td>-82.8170</td>
       <td>2024-06-14 12:00:00</td>
+      <td>2</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
+      <td>2024-06-15 23:59:59+00:00</td>
+      <td>26.937498</td>
+      <td>-82.812500</td>
       <td>0.005112</td>
       <td>0.005282</td>
-      <td>0.005458</td>
-      <td>0.005582</td>
-      <td>0.005868</td>
-      <td>0.006226</td>
       <td>...</td>
       <td>0.000118</td>
       <td>0.000108</td>
@@ -364,13 +361,13 @@ res.head()
       <td>26.6875</td>
       <td>-82.8065</td>
       <td>2024-06-14 12:00:00</td>
+      <td>3</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
+      <td>2024-06-15 23:59:59+00:00</td>
+      <td>26.687498</td>
+      <td>-82.812500</td>
       <td>0.004648</td>
       <td>0.004904</td>
-      <td>0.005108</td>
-      <td>0.005242</td>
-      <td>0.005548</td>
-      <td>0.005944</td>
       <td>...</td>
       <td>0.000178</td>
       <td>0.000158</td>
@@ -388,13 +385,13 @@ res.head()
       <td>26.6675</td>
       <td>-82.6455</td>
       <td>2024-06-14 12:00:00</td>
+      <td>4</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
+      <td>2024-06-15 23:59:59+00:00</td>
+      <td>26.687498</td>
+      <td>-82.645828</td>
       <td>0.004944</td>
       <td>0.005064</td>
-      <td>0.005190</td>
-      <td>0.005288</td>
-      <td>0.005504</td>
-      <td>0.005838</td>
       <td>...</td>
       <td>0.000094</td>
       <td>0.000078</td>
@@ -409,7 +406,7 @@ res.head()
     </tr>
   </tbody>
 </table>
-<p>5 rows × 176 columns</p>
+<p>5 rows × 180 columns</p>
 </div>
 
 
@@ -420,7 +417,7 @@ Sometimes it is helpful to look at the granules. There are helper functions for 
 
 
 ```python
-ds = plan.open_dataset(plan[0], geometry="grid")
+ds = plan.open_dataset(plan[0])
 ds
 ```
 

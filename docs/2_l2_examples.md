@@ -1,8 +1,8 @@
-# L2 matchups with PACE data -- RRS
+# Level 2 matchups with PACE data
 
 * Create a plan for files to use `pc.plan()`
 * Print the plan to check it `print(plan.summary())`
-* Do the plan and get matchups `pc.matchup(plan, geometry="swath")`
+* Do the plan and get matchups `pc.matchup(plan, open_method="datatree-merge", spatial_method="xoak")`
 
 ## Prerequisite -- Login to EarthData
 
@@ -18,7 +18,7 @@ earthaccess.login()
 
 
 
-    <earthaccess.auth.Auth at 0x7f66b86c5880>
+    <earthaccess.auth.Auth at 0x7fc30a694d70>
 
 
 
@@ -45,14 +45,13 @@ print(short_names)
 
 
 ```python
-from pathlib import Path
-import earthaccess
-import point_collocation as pc
 import pandas as pd
-
-HERE = Path.cwd()
-POINTS_CSV = HERE / "fixtures" / "points.csv"
-df_points = pd.read_csv(POINTS_CSV)  # lat, lon, date columns
+url = (
+    "https://raw.githubusercontent.com/"
+    "fish-pace/point-collocation/main/"
+    "examples/fixtures/points.csv"
+)
+df_points = pd.read_csv(url)
 print(len(df_points))
 df_points.head()
 ```
@@ -123,15 +122,15 @@ df_points.head()
 
 
 
-## Get a plan for matchups from PACE data
+## Get a plan for matchups for 1st 50 points from PACE data
 
 
 ```python
 %%time
-# bounding_box = (lon_min, lat_min, lon_max, lat_max)
+# time 11 s / 5 s
 import point_collocation as pc
 plan = pc.plan(
-    df_points[0:100], # -82.7375, 27.3835	
+    df_points[0:50], 	
     data_source="earthaccess",
     source_kwargs={
         "short_name": "PACE_OCI_L2_AOP",
@@ -140,8 +139,8 @@ plan = pc.plan(
 )
 ```
 
-    CPU times: user 336 ms, sys: 19.5 ms, total: 356 ms
-    Wall time: 2.03 s
+    CPU times: user 640 ms, sys: 61 ms, total: 701 ms
+    Wall time: 9.02 s
 
 
 
@@ -149,9 +148,9 @@ plan = pc.plan(
 plan.summary()
 ```
 
-    Plan: 100 points → 24 unique granule(s)
+    Plan: 50 points → 13 unique granule(s)
       Points with 0 matches : 0
-      Points with >1 matches: 20
+      Points with >1 matches: 10
       Time buffer: 0 days 12:00:00
     
     First 5 point(s):
@@ -170,55 +169,72 @@ plan.summary()
 
 
 ```python
-plan.show_variables(geometry="swath")
+%%time
+# This uses open_method="auto". It will try xr.open_dataset
+# discover no lat/lon and then try xr.open_datatree + merge. 
+# If you know, the netcdfs are grouped, you can pass in
+# open_method="datatree-merge" yourself
+plan.show_variables()
 ```
 
-    geometry     : 'swath'
-    open_method  : 'datatree-merge'
-    Dimensions : {'number_of_bands': 286, 'number_of_reflective_bands': 286, 'wavelength_3d': 172, 'number_of_lines': 1710, 'pixels_per_line': 1272}
-    Variables  : ['wavelength', 'vcal_gain', 'vcal_offset', 'F0', 'aw', 'bbw', 'k_oz', 'k_no2', 'Tau_r', 'year', 'day', 'msec', 'time', 'detnum', 'mside', 'slon', 'clon', 'elon', 'slat', 'clat', 'elat', 'csol_z', 'Rrs', 'Rrs_unc', 'aot_865', 'angstrom', 'avw', 'nflh', 'l2_flags', 'longitude', 'latitude', 'tilt']
+    open_method: {'xarray_open': 'datatree', 'open_kwargs': {'chunks': {}, 'engine': 'h5netcdf', 'decode_timedelta': False}, 'coords': 'auto', 'set_coords': True, 'dim_renames': None, 'auto_align_phony_dims': None, 'merge': 'all', 'merge_kwargs': {}}
+    
+    Dimensions: {'number_of_bands': 286, 'number_of_reflective_bands': 286, 'wavelength_3d': 172, 'number_of_lines': 1710, 'pixels_per_line': 1272}
+    
+    Variables: ['wavelength', 'vcal_gain', 'vcal_offset', 'F0', 'aw', 'bbw', 'k_oz', 'k_no2', 'Tau_r', 'year', 'day', 'msec', 'time', 'detnum', 'mside', 'slon', 'clon', 'elon', 'slat', 'clat', 'elat', 'csol_z', 'Rrs', 'Rrs_unc', 'aot_865', 'angstrom', 'avw', 'nflh', 'l2_flags', 'longitude', 'latitude', 'tilt']
     
     Geolocation: ('longitude', 'latitude') — lon dims=('number_of_lines', 'pixels_per_line'), lat dims=('number_of_lines', 'pixels_per_line')
     
     DataTree groups (detail):
       /
-        Dimensions : {}
-        Variables  : []
+        Dimensions: {}
+        Variables: []
       /sensor_band_parameters
-        Dimensions : {'number_of_bands': 286, 'number_of_reflective_bands': 286, 'wavelength_3d': 172}
-        Variables  : ['wavelength', 'vcal_gain', 'vcal_offset', 'F0', 'aw', 'bbw', 'k_oz', 'k_no2', 'Tau_r']
+        Dimensions: {'number_of_bands': 286, 'number_of_reflective_bands': 286, 'wavelength_3d': 172}
+        Variables: ['wavelength', 'vcal_gain', 'vcal_offset', 'F0', 'aw', 'bbw', 'k_oz', 'k_no2', 'Tau_r']
       /scan_line_attributes
-        Dimensions : {'number_of_lines': 1710}
-        Variables  : ['year', 'day', 'msec', 'time', 'detnum', 'mside', 'slon', 'clon', 'elon', 'slat', 'clat', 'elat', 'csol_z']
+        Dimensions: {'number_of_lines': 1710}
+        Variables: ['year', 'day', 'msec', 'time', 'detnum', 'mside', 'slon', 'clon', 'elon', 'slat', 'clat', 'elat', 'csol_z']
       /geophysical_data
-        Dimensions : {'number_of_lines': 1710, 'pixels_per_line': 1272, 'wavelength_3d': 172}
-        Variables  : ['Rrs', 'Rrs_unc', 'aot_865', 'angstrom', 'avw', 'nflh', 'l2_flags']
+        Dimensions: {'number_of_lines': 1710, 'pixels_per_line': 1272, 'wavelength_3d': 172}
+        Variables: ['Rrs', 'Rrs_unc', 'aot_865', 'angstrom', 'avw', 'nflh', 'l2_flags']
       /navigation_data
-        Dimensions : {'number_of_lines': 1710, 'pixels_per_line': 1272}
-        Variables  : ['longitude', 'latitude', 'tilt']
+        Dimensions: {'number_of_lines': 1710, 'pixels_per_line': 1272}
+        Variables: ['longitude', 'latitude', 'tilt']
       /processing_control
-        Dimensions : {}
-        Variables  : []
+        Dimensions: {}
+        Variables: []
       /processing_control/input_parameters
-        Dimensions : {}
-        Variables  : []
+        Dimensions: {}
+        Variables: []
       /processing_control/flag_percentages
-        Dimensions : {}
-        Variables  : []
+        Dimensions: {}
+        Variables: []
+    CPU times: user 513 ms, sys: 40.7 ms, total: 554 ms
+    Wall time: 1.25 s
 
 
 ## Get the matchups using that plan
 
+`pc.matchup()` with `open_method="datatree-merge"` opens each L2 granule as a DataTree and merges all groups into a flat dataset. Use `spatial_method="xoak"` for 2-D swath geolocation. I turn on `batch_size=5` and `silent=False` to watch the progress.
+
+Notice, that point 0 is matched to 2 granules and so has 2 rows with the same `pc_id`.
+
 
 ```python
 %%time
-res = pc.matchup(plan[0:5], geometry="swath", variables=["Rrs"])
-res
+# 1 min /
+res = pc.matchup(plan, spatial_method="xoak", variables=["Rrs"])
 ```
 
-    CPU times: user 10.8 s, sys: 806 ms, total: 11.7 s
-    Wall time: 18.8 s
+    CPU times: user 32.3 s, sys: 2.28 s, total: 34.6 s
+    Wall time: 58.9 s
 
+
+
+```python
+res.head()
+```
 
 
 
@@ -244,13 +260,13 @@ res
       <th>lat</th>
       <th>lon</th>
       <th>time</th>
+      <th>pc_id</th>
       <th>granule_id</th>
+      <th>granule_time</th>
+      <th>granule_lat</th>
+      <th>granule_lon</th>
       <th>Rrs_346</th>
       <th>Rrs_348</th>
-      <th>Rrs_351</th>
-      <th>Rrs_353</th>
-      <th>Rrs_356</th>
-      <th>Rrs_358</th>
       <th>...</th>
       <th>Rrs_706</th>
       <th>Rrs_707</th>
@@ -270,11 +286,11 @@ res
       <td>27.3835</td>
       <td>-82.7375</td>
       <td>2024-06-13 12:00:00</td>
+      <td>0</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
+      <td>2024-06-13 17:18:49+00:00</td>
+      <td>27.443144</td>
+      <td>-82.612923</td>
       <td>NaN</td>
       <td>NaN</td>
       <td>...</td>
@@ -294,11 +310,11 @@ res
       <td>27.3835</td>
       <td>-82.7375</td>
       <td>2024-06-13 12:00:00</td>
+      <td>0</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
+      <td>2024-06-13 18:52:08+00:00</td>
+      <td>27.383293</td>
+      <td>-82.721527</td>
       <td>NaN</td>
       <td>NaN</td>
       <td>...</td>
@@ -318,13 +334,13 @@ res
       <td>27.1190</td>
       <td>-82.7125</td>
       <td>2024-06-14 12:00:00</td>
+      <td>1</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
+      <td>2024-06-14 17:53:34+00:00</td>
+      <td>27.101389</td>
+      <td>-82.717186</td>
       <td>0.01299</td>
       <td>0.012946</td>
-      <td>0.013148</td>
-      <td>0.013172</td>
-      <td>0.012918</td>
-      <td>0.012968</td>
       <td>...</td>
       <td>0.000238</td>
       <td>0.000228</td>
@@ -342,11 +358,11 @@ res
       <td>26.9435</td>
       <td>-82.8170</td>
       <td>2024-06-14 12:00:00</td>
+      <td>2</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
+      <td>2024-06-14 17:53:34+00:00</td>
+      <td>26.954554</td>
+      <td>-82.810219</td>
       <td>NaN</td>
       <td>NaN</td>
       <td>...</td>
@@ -366,35 +382,11 @@ res
       <td>26.6875</td>
       <td>-82.8065</td>
       <td>2024-06-14 12:00:00</td>
+      <td>3</td>
       <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>...</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-    </tr>
-    <tr>
-      <th>5</th>
-      <td>26.6675</td>
-      <td>-82.6455</td>
-      <td>2024-06-14 12:00:00</td>
-      <td>https://obdaac-tea.earthdatacloud.nasa.gov/ob-...</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
-      <td>NaN</td>
+      <td>2024-06-14 17:53:34+00:00</td>
+      <td>26.703817</td>
+      <td>-82.817726</td>
       <td>NaN</td>
       <td>NaN</td>
       <td>...</td>
@@ -411,9 +403,87 @@ res
     </tr>
   </tbody>
 </table>
-<p>6 rows × 176 columns</p>
+<p>5 rows × 180 columns</p>
 </div>
 
+
+
+## Predefined profiles for opening granules
+
+Granules that have groups can be opened with `xr.open_datatree()` but the user will need to specify how the groups are merged so that the lat, lon and variables can be found.  `point-collocation` has predefined profiles that you can use or modify.
+
+
+```python
+import point_collocation.profiles as pf
+pf.pace_l2
+```
+
+
+
+
+    {'xarray_open': 'datatree', 'merge': 'all'}
+
+
+
+You could modify this for PACE level 2 netcdfs by telling it to only merge the relevant groups. This doesn't actually affect speed or performance in this case.
+
+
+```python
+test = pf.pace_l2
+test['merge'] = ['/geophysical_data', '/navigation_data']
+```
+
+Pass to `open_method`:
+
+
+```python
+%%time
+out = pc.matchup(plan, open_method=test, variables=["Rrs"],
+                     spatial_method="xoak")
+```
+
+    CPU times: user 28 s, sys: 1.41 s, total: 29.4 s
+    Wall time: 52 s
+
+
+
+```python
+plan.show_variables(open_method=test)
+```
+
+    open_method: {'xarray_open': 'datatree', 'merge': ['/geophysical_data', '/navigation_data'], 'open_kwargs': {'chunks': {}, 'engine': 'h5netcdf', 'decode_timedelta': False}, 'coords': 'auto', 'set_coords': True, 'dim_renames': None, 'auto_align_phony_dims': None, 'merge_kwargs': {}}
+    
+    Dimensions: {'number_of_lines': 1710, 'pixels_per_line': 1272, 'wavelength_3d': 172}
+    
+    Variables: ['Rrs', 'Rrs_unc', 'aot_865', 'angstrom', 'avw', 'nflh', 'l2_flags', 'longitude', 'latitude', 'tilt']
+    
+    Geolocation: ('longitude', 'latitude') — lon dims=('number_of_lines', 'pixels_per_line'), lat dims=('number_of_lines', 'pixels_per_line')
+    
+    DataTree groups (detail):
+      /
+        Dimensions: {}
+        Variables: []
+      /sensor_band_parameters
+        Dimensions: {'number_of_bands': 286, 'number_of_reflective_bands': 286, 'wavelength_3d': 172}
+        Variables: ['wavelength', 'vcal_gain', 'vcal_offset', 'F0', 'aw', 'bbw', 'k_oz', 'k_no2', 'Tau_r']
+      /scan_line_attributes
+        Dimensions: {'number_of_lines': 1710}
+        Variables: ['year', 'day', 'msec', 'time', 'detnum', 'mside', 'slon', 'clon', 'elon', 'slat', 'clat', 'elat', 'csol_z']
+      /geophysical_data
+        Dimensions: {'number_of_lines': 1710, 'pixels_per_line': 1272, 'wavelength_3d': 172}
+        Variables: ['Rrs', 'Rrs_unc', 'aot_865', 'angstrom', 'avw', 'nflh', 'l2_flags']
+      /navigation_data
+        Dimensions: {'number_of_lines': 1710, 'pixels_per_line': 1272}
+        Variables: ['longitude', 'latitude', 'tilt']
+      /processing_control
+        Dimensions: {}
+        Variables: []
+      /processing_control/input_parameters
+        Dimensions: {}
+        Variables: []
+      /processing_control/flag_percentages
+        Dimensions: {}
+        Variables: []
 
 
 

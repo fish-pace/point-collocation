@@ -19,16 +19,21 @@ theme:
       icon: material/brightness-4
       name: Switch to light mode
   features:
-  - navigation.tabs
   - navigation.sections
+  - navigation.expand
   - content.code.copy
+extra_css:
+- stylesheets/extra.css
 nav:
 - Home: index.md
+- Examples:
+  - Quickstart: quickstart.md
+  - Level 3 matchups with PACE data: 1_l3_examples.md
+  - Level 2 matchups with PACE data: 2_l2_examples.md
+  - Large number of point matchups: 3_many_points.md
+  - ICESat-2 ATL21 Matchups: 4_icesat2.md
+  - Testing across multiple products: 5_more_products.md
 - Installation: installation.md
-- Quickstart: quickstart.md
-- More Examples:
-  - L2 matchups with PACE data -- RRS: l2_examples.md
-  - Basic matchups with PACE data: l3_examples.md
 - API Reference: api.md
 - Contributing: contributing.md
 - Releasing: releasing.md

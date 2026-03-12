@@ -47,6 +47,6 @@ print(out)
 
 - [Installation](installation.md) — full install options
 - [Quickstart](quickstart.md) — end-to-end example for gridded (L3) data
-- [More Examples](l2_examples.md) — L2 swath data, multi-file, diagnostics
+- [Examples](1_l3_examples.md) — L3, L2 swath, many points, ICESat-2, and more
 - [API Reference](api.md) — auto-generated from source docstrings
 - [Contributing](contributing.md) — dev setup, tests, local docs preview
