@@ -188,25 +188,31 @@ class Plan:
 
     def open_dataset(
         self,
-        result: Any,
-        open_method: str | dict | None = None,
-        open_dataset_kwargs: dict[str, Any] | None = None,
+        result: "int | Any",
+        open_method: "str | dict | None" = None,
+        *,
+        silent: bool = False,
     ) -> "xr.Dataset":
         """Open a single granule result as an :class:`xarray.Dataset`.
 
         Parameters
         ----------
         result:
-            A single earthaccess result object, typically obtained via
-            ``plan[n]``.
+            An integer index into ``plan.results`` (e.g. ``0``), or a
+            single earthaccess result object obtained via ``plan[n]``.
+            Using an integer is preferred: ``plan.open_dataset(0)`` is
+            equivalent to ``plan.open_dataset(plan[0])``.
         open_method:
             How to open the granule.  Accepts the same string presets or
             dict spec as :func:`~point_collocation.matchup`.  Defaults to
             ``"auto"`` (try dataset first, fall back to datatree merge).
-        open_dataset_kwargs:
-            Keyword arguments forwarded to the xarray open function.
-            ``chunks`` defaults to ``{}`` (lazy/dask loading).  ``engine``
-            defaults to ``"h5netcdf"`` when not specified.
+            Pass open-function kwargs via the ``"open_kwargs"`` key of a
+            dict spec, e.g.
+            ``open_method={"open_kwargs": {"engine": "netcdf4"}}``.
+        silent:
+            When ``False`` (default), print the effective open_method spec
+            actually used (after normalization and defaults are applied).
+            Set to ``True`` to suppress this output.
 
         Returns
         -------
@@ -214,6 +220,15 @@ class Plan:
             The caller is responsible for closing the dataset when finished
             (e.g. ``ds.close()`` or ``with plan.open_dataset(...) as ds:``).
         """
+        if isinstance(result, int):
+            n = len(self.results)
+            if result < 0 or result >= n:
+                raise IndexError(
+                    f"result index {result} is out of range for a plan with {n} result(s). "
+                    f"Valid indices are 0 to {n - 1}."
+                )
+            result = self.results[result]
+
         from point_collocation.core._open_method import (
             _apply_coords,
             _build_effective_open_kwargs,
@@ -234,7 +249,14 @@ class Plan:
         import xarray as xr
 
         effective_open_method = "auto" if open_method is None else open_method
-        spec = _normalize_open_method(effective_open_method, open_dataset_kwargs)
+        spec = _normalize_open_method(effective_open_method)
+
+        xarray_open = spec.get("xarray_open", "dataset")
+        effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
+
+        if not silent:
+            display_spec = {**spec, "open_kwargs": effective_kwargs}
+            print(f"open_method: {display_spec!r}")
 
         file_objs = earthaccess.open([result], pqdm_kwargs={"disable": True})
         if len(file_objs) != 1:
@@ -242,9 +264,6 @@ class Plan:
                 f"Expected 1 file object from earthaccess.open, got {len(file_objs)}."
             )
         file_obj = file_objs[0]
-
-        xarray_open = spec.get("xarray_open", "dataset")
-        effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
 
         if xarray_open == "datatree":
             dt = _open_datatree_fn(file_obj, effective_kwargs)
@@ -283,8 +302,9 @@ class Plan:
     def open_mfdataset(
         self,
         results: "list[Any] | Plan",
-        open_method: str | dict | None = None,
-        open_dataset_kwargs: dict[str, Any] | None = None,
+        open_method: "str | dict | None" = None,
+        *,
+        silent: bool = False,
     ) -> "xr.Dataset":
         """Open multiple granule results as a single :class:`xarray.Dataset`.
 
@@ -300,10 +320,13 @@ class Plan:
             ``"datatree-merge"`` opens each granule as a DataTree, merges
             its groups into a flat dataset, then concatenates all granules
             along a new ``granule`` dimension.  Defaults to ``"auto"``.
-        open_dataset_kwargs:
-            Keyword arguments forwarded to the xarray open function.
-            ``chunks`` defaults to ``{}`` (lazy/dask loading).  ``engine``
-            defaults to ``"h5netcdf"`` when not specified.
+            Pass open-function kwargs via the ``"open_kwargs"`` key of a
+            dict spec, e.g.
+            ``open_method={"open_kwargs": {"engine": "netcdf4"}}``.
+        silent:
+            When ``False`` (default), print the effective open_method spec
+            actually used (after normalization and defaults are applied).
+            Set to ``True`` to suppress this output.
 
         Returns
         -------
@@ -329,17 +352,21 @@ class Plan:
         import xarray as xr
 
         effective_open_method = "auto" if open_method is None else open_method
-        spec = _normalize_open_method(effective_open_method, open_dataset_kwargs)
+        spec = _normalize_open_method(effective_open_method)
+
+        xarray_open = spec.get("xarray_open", "dataset")
+        effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
+
+        if not silent:
+            display_spec = {**spec, "open_kwargs": effective_kwargs}
+            print(f"open_method: {display_spec!r}")
 
         result_list = results.results if isinstance(results, Plan) else list(results)
         file_objs = earthaccess.open(result_list, pqdm_kwargs={"disable": True})
 
-        xarray_open = spec.get("xarray_open", "dataset")
-
         if xarray_open == "datatree":
             # Open each granule as a DataTree, merge its groups, then
             # concatenate all granule datasets along a new "granule" dim.
-            effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
             merged_datasets: list[xr.Dataset] = []
             for file_obj in file_objs:
                 dt = _open_datatree_fn(file_obj, effective_kwargs)
@@ -357,7 +384,6 @@ class Plan:
             # separate datasets and merge them, then concatenate all granules
             # along a new "granule" dimension.
             # Without merge, use xr.open_mfdataset for simplicity.
-            effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
             merge = spec.get("merge")
             if merge is not None:
                 merged_datasets = []
@@ -380,8 +406,7 @@ class Plan:
 
     def show_variables(
         self,
-        open_method: str | dict | None = None,
-        open_dataset_kwargs: dict[str, Any] | None = None,
+        open_method: "str | dict | None" = None,
     ) -> None:
         """Print the first granule's groups, dimensions, and variables.
 
@@ -395,19 +420,16 @@ class Plan:
         the merged flat dataset.
 
         To obtain the full xarray representation programmatically use
-        ``plan.open_dataset(plan[0])`` instead.
+        ``plan.open_dataset(0)`` instead.
 
         Parameters
         ----------
         open_method:
             How to open the granule.  Accepts the same string presets or
             dict spec as :func:`~point_collocation.matchup`.  Defaults to
-            ``"auto"``.
-        open_dataset_kwargs:
-            Keyword arguments forwarded to the xarray open function when
-            the h5py fast path is unavailable.
-            ``chunks`` defaults to ``{}`` (lazy/dask loading).  ``engine``
-            defaults to ``"h5netcdf"`` when not specified.
+            ``"auto"``.  Pass open-function kwargs via the ``"open_kwargs"``
+            key of a dict spec, e.g.
+            ``open_method={"open_kwargs": {"engine": "netcdf4"}}``.
 
         Raises
         ------
@@ -430,7 +452,7 @@ class Plan:
             raise ValueError("No granules in plan — cannot show variables.")
 
         effective_open_method = "auto" if open_method is None else open_method
-        spec = _normalize_open_method(effective_open_method, open_dataset_kwargs)
+        spec = _normalize_open_method(effective_open_method)
         xarray_open = spec.get("xarray_open", "dataset")
 
         try:
