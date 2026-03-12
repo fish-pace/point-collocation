@@ -1,4 +1,19 @@
 /* -----------------------------------------------------------------------
+   Sidebar: bold section labels (e.g. "Examples") and indent child links
+   ----------------------------------------------------------------------- */
+
+/* Bold the top-level section labels in the left sidebar */
+.md-nav--primary .md-nav__item--section > label.md-nav__link,
+.md-nav--primary .md-nav__item--section > .md-nav__link:not(a) {
+  font-weight: 700;
+}
+
+/* Indent the links that live inside a sidebar section (level 1) */
+.md-nav[data-md-level="1"] .md-nav__item > a.md-nav__link {
+  padding-left: 1.4rem;
+}
+
+/* -----------------------------------------------------------------------
    Table styling — applied to pandas DataFrame HTML tables produced by
    nbconvert.  These tables carry class="dataframe" and a border="1"
    attribute; the rules below replace the plain black-border look with a
