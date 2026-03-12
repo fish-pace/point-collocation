@@ -5,17 +5,15 @@
    clean, Bootstrap-inspired style that respects the Material theme palette.
    ----------------------------------------------------------------------- */
 
-/* Container: enable horizontal scrolling on small screens */
-.md-content .dataframe-wrapper {
-  overflow-x: auto;
-  margin: 1em 0;
-}
-
-/* Core table reset */
+/* Core table reset — display:block + overflow-x:auto makes wide tables
+   scroll horizontally within the content column instead of overflowing
+   into the right-hand table-of-contents sidebar. */
 .md-content table.dataframe {
+  display: block;
+  overflow-x: auto;
   border-collapse: collapse;
   border-spacing: 0;
-  width: auto;
+  width: max-content;
   max-width: 100%;
   margin: 1em 0;
   font-size: 0.85em;
