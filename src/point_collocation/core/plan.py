@@ -293,6 +293,7 @@ class Plan:
 
         if not silent:
             display_spec = {**spec, "open_kwargs": effective_kwargs}
+            display_spec.setdefault("merge", None)
             print(f"open_method: {display_spec!r}")
 
         if xarray_open == "datatree":
@@ -390,6 +391,7 @@ class Plan:
 
         if not silent:
             display_spec = {**spec, "open_kwargs": effective_kwargs}
+            display_spec.setdefault("merge", None)
             print(f"open_method: {display_spec!r}")
 
         result_list = results.results if isinstance(results, Plan) else list(results)
