@@ -8,17 +8,23 @@
 ## Standard Install
 
 ```bash
-pip install point-collocation[earthaccess]
+pip install point-collocation
 ```
 
-This installs the core package plus [`earthaccess`](https://github.com/nsidc/earthaccess) for NASA Earthdata integration. The package is available on [PyPI](https://pypi.org/project/point-collocation/).
+This installs the core package with all core functionality: NASA Earthdata integration (`earthaccess`), CF-convention support (`cf-xarray`), and spatial interpolation (`scipy`). The package is available on [PyPI](https://pypi.org/project/point-collocation/).
 
-## L2 / Swath Data
+## L2 / Swath Data with xoak
 
-To work with L2 swath data (2-D lat/lon arrays) you also need [`xoak`](https://xoak.readthedocs.io/) and `scikit-learn`:
+To use advanced xoak-based spatial lookup algorithms (2-D lat/lon swath data via `xoak` and `scikit-learn`):
 
 ```bash
-pip install point-collocation[earthaccess,swath]
+pip install point-collocation[xoak-extra]
+```
+
+## All Optional Features
+
+```bash
+pip install point-collocation[all]
 ```
 
 ## Development Install
@@ -26,14 +32,14 @@ pip install point-collocation[earthaccess,swath]
 Clone the repository and install in editable mode with all dev dependencies:
 
 ```bash
-git clone https://github.com/fish-pace/earthaccess_matchup.git
-cd earthaccess_matchup
-pip install -e ".[earthaccess,swath,dev]"
+git clone https://github.com/fish-pace/point-collocation.git
+cd point-collocation
+pip install -e ".[xoak-extra,dev]"
 ```
 
 ## Verify
 
 ```python
 import point_collocation as pc
-print(pc.__version__)  # should print 0.1.0 (or newer)
+print(pc.__version__)  # should print 0.5.0 (or newer)
 ```

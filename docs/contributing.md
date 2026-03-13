@@ -5,9 +5,9 @@ Thank you for your interest in improving **point-collocation**!
 ## Set Up a Dev Environment
 
 ```bash
-git clone https://github.com/fish-pace/earthaccess_matchup.git
-cd earthaccess_matchup
-pip install -e ".[earthaccess,swath,dev]"
+git clone https://github.com/fish-pace/point-collocation.git
+cd point-collocation
+pip install -e ".[xoak-extra,dev]"
 ```
 
 Install additional test dependencies required by some test modules (e.g. `test_adapters.py` needs `netcdf4`; `h5netcdf` and `dask` are used by integration tests):

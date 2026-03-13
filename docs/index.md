@@ -12,7 +12,7 @@ Point-based lat/lon/time matchups against cloud-hosted NASA EarthData granules.
 ## Quick Install
 
 ```bash
-pip install point-collocation[earthaccess]
+pip install point-collocation
 ```
 
 Available on [PyPI](https://pypi.org/project/point-collocation/).

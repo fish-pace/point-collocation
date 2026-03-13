@@ -10,15 +10,16 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-    "xarray>=2023.1.0",
+    "xarray>=2025.07.1",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
+    "earthaccess>=0.15.0",
+    "cf-xarray>=0.7.0",
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
-earthaccess = ["earthaccess>=0.9.0"]
-swath = ["xoak>=0.2.0", "scikit-learn>=1.0.0"]
-cf = ["cf-xarray>=0.7.0"]
+xoak-extra = ["xoak>=0.2.0", "scikit-learn>=1.0.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
@@ -34,11 +35,11 @@ docs = [
     "nbconvert>=7.0",
 ]
 all = [
-    "point-collocation[earthaccess,swath,cf,dev]",
+    "point-collocation[xoak-extra]",
 ]
 
 [project.urls]
-Repository = "https://github.com/fish-pace/earthaccess_matchup"
+Repository = "https://github.com/fish-pace/point-collocation"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/point_collocation"]
