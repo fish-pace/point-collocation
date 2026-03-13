@@ -466,10 +466,8 @@ class Plan:
             If the plan contains no granules.
         """
         from point_collocation.core._open_method import (
-            _GEOLOC_PAIRS,
             _apply_coords,
             _build_effective_open_kwargs,
-            _h5py_file_info,
             _merge_datatree_with_spec,
             _normalize_open_method,
             _open_and_merge_dataset_groups,
@@ -521,120 +519,9 @@ class Plan:
         display_spec.setdefault("merge", None)
         print(f"open_method: {display_spec!r}")
 
-        def _seek_back() -> None:
-            if hasattr(file_obj, "seek"):
-                try:
-                    file_obj.seek(0)  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-
         # ---------------------------------------------------------------
-        # Fast path: use h5py for per-group metadata inspection.
+        # Use xarray to inspect the file (same lazy path as open_dataset).
         # ---------------------------------------------------------------
-        h5_info = _h5py_file_info(file_obj)
-        _seek_back()  # ensure file_obj is at start for subsequent xarray opens
-        if h5_info is not None:
-            # Determine which groups to include based on merge spec.
-            merge = spec.get("merge")
-            if merge == "root":
-                relevant_groups: set[str] | None = {"/"}
-            elif isinstance(merge, list):
-                relevant_groups = set(merge)
-            else:
-                # "all" or no merge key: include all discovered groups
-                relevant_groups = None
-
-            all_var_names: set[str] = set()
-            merged_dims: dict[str, int] = {}
-            merged_vars: list[str] = []
-
-            for group_path, vars_dict in h5_info:
-                if relevant_groups is not None and group_path not in relevant_groups:
-                    continue
-
-                # Collect dimension sizes from variable shapes.
-                for vinfo in vars_dict.values():
-                    for dim, size in zip(vinfo["dims"], vinfo["shape"]):
-                        if dim and dim != "?":
-                            merged_dims.setdefault(dim, size)
-
-                all_var_names.update(vars_dict.keys())
-                for vname in vars_dict:
-                    if vname not in merged_vars:
-                        merged_vars.append(vname)
-
-            # Flat merged summary across all relevant groups.
-            print(f"\nDimensions: {merged_dims}")
-            print(f"\nVariables: {merged_vars}")
-
-            # Geolocation detection — handles coords as dict, list, or 'auto'.
-            coords = spec.get("coords", "auto")
-            set_coords_val = spec.get("set_coords", True)
-            if isinstance(coords, dict):
-                lat_name = coords.get("lat")
-                lon_name = coords.get("lon")
-                if (
-                    lat_name and lon_name
-                    and lat_name in all_var_names
-                    and lon_name in all_var_names
-                ):
-                    print(f"\nGeolocation: ({lon_name!r}, {lat_name!r}) detected")
-                else:
-                    print(
-                        f"\nGeolocation: NONE detected with "
-                        f"'coords': {coords!r}, 'set_coords': {set_coords_val!r}."
-                    )
-            elif isinstance(coords, list):
-                missing = [n for n in coords if n not in all_var_names]
-                if not missing:
-                    geo_pairs = [
-                        (lon_n, lat_n)
-                        for lon_n, lat_n in _GEOLOC_PAIRS
-                        if lon_n in coords and lat_n in coords
-                    ]
-                    if geo_pairs:
-                        lon_n, lat_n = geo_pairs[0]
-                        print(f"\nGeolocation: ({lon_n!r}, {lat_n!r}) detected")
-                    else:
-                        print(f"\nGeolocation: {coords!r} found in dataset")
-                else:
-                    print(
-                        f"\nGeolocation: NONE — specified coords {missing!r} not found."
-                    )
-            else:
-                # 'auto': check _GEOLOC_PAIRS
-                geo_pairs_found = [
-                    (lon_n, lat_n)
-                    for lon_n, lat_n in _GEOLOC_PAIRS
-                    if lon_n in all_var_names and lat_n in all_var_names
-                ]
-                if geo_pairs_found:
-                    lon_n, lat_n = geo_pairs_found[0]
-                    print(f"\nGeolocation: ({lon_n!r}, {lat_n!r}) detected")
-                else:
-                    print(
-                        f"\nGeolocation: NONE detected with "
-                        f"'coords': {coords!r}, 'set_coords': {set_coords_val!r}. "
-                        "Try open_method='datatree-merge' or specify "
-                        "open_method={'coords': {'lat': '...', 'lon': '...'}}."
-                    )
-
-            return
-
-        # ---------------------------------------------------------------
-        # Fallback: use xarray to inspect the file.
-        # ---------------------------------------------------------------
-        # For "auto" mode, probe the first granule to resolve which open
-        # path to use (dataset vs. datatree).
-        if xarray_open == "auto":
-            try:
-                spec = _resolve_auto_spec(file_obj, spec)
-                xarray_open = spec["xarray_open"]
-                effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
-            except ValueError:
-                xarray_open = "dataset"
-                spec = {**spec, "xarray_open": "dataset"}
-
         dt = None
         merge = spec.get("merge")
         if xarray_open == "datatree":
