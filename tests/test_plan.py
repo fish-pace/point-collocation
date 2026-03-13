@@ -5113,6 +5113,58 @@ class TestNdpointSpatialMethod:
 
         assert result_ndpoint.loc[0, "sst"] == pytest.approx(result_xoak.loc[0, "sst"])
 
+    def test_grid_matchup_global_granule_returns_nearest_value(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_method='dataset' + ndpoint on a global granule slices correctly and returns a value."""
+        pytest.importorskip("scipy")
+
+        # Large global grid (181 lats × 361 lons) with the query point near centre.
+        lats = list(range(-90, 91))        # integers -90, -89, …, 90
+        lons = list(range(-180, 181))      # integers -180, -179, …, 180
+        nc_path = str(tmp_path / "global_grid.nc")
+        _make_l3_dataset(lats, lons, seed=99).to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        # Query a single point at (lat=10, lon=20).
+        pts = pd.DataFrame(
+            {
+                "lat": [10.0],
+                "lon": [20.0],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/global_grid.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            variables=["sst"],
+            spatial_method="ndpoint",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert "sst" in result.columns
+        assert len(result) == 1
+        assert not math.isnan(result.loc[0, "sst"])
+
 
 class TestAutoSpatialMethod:
     """Tests for spatial_method='auto' (default): dim-based routing + nearest→ndpoint fallback."""
