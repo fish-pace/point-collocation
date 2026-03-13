@@ -82,35 +82,68 @@
 /* -----------------------------------------------------------------------
    xarray Dataset rendering in MkDocs documentation
 
-   The xarray HTML repr embeds its own <style> block with rules that are
-   designed for Jupyter notebooks.  The MkDocs Material theme's
-   higher-specificity CSS rules for <pre> elements can override xarray's
-   "display: none" on .xr-text-repr-fallback, causing both the plain-text
-   fallback and the interactive HTML repr to appear simultaneously.
+   The xarray HTML repr embeds its own <style> block with rules designed
+   for Jupyter notebooks.  The MkDocs Material theme's higher-specificity
+   CSS rules for <ul>, <li>, and <pre> elements interfere with xarray's
+   layout in two ways:
 
-   These rules restore the intended behaviour within the MkDocs content
-   area: only the interactive HTML repr is shown, matching how the output
-   looks in a Jupyter notebook.
+   1. Visibility: Material's <pre> rules override xarray's
+      "display: none" on .xr-text-repr-fallback, causing both the
+      plain-text fallback and the interactive HTML repr to appear at once.
+
+   2. Grid layout: Material's ".md-typeset ul:not([hidden]) { display:
+      flow-root }" has higher specificity than xarray's ".xr-sections
+      { display: grid }" and ".xr-var-list { display: contents }", so
+      the variable table collapses into a stacked single-column list.
+      Material also adds unwanted left margins to <ul> elements.
+
+   The rules below restore the intended Jupyter-notebook appearance
+   within the MkDocs content area.
    ----------------------------------------------------------------------- */
 
-/* Hide the plain-text fallback — the interactive HTML repr is shown instead. */
+/* 1. Hide the plain-text fallback; show only the interactive HTML repr. */
 .md-content .xr-text-repr-fallback {
   display: none !important;
 }
 
-/* Ensure the interactive xarray HTML repr is always visible.  The xarray
-   <style> block already sets display:block !important on .xr-wrap, but an
-   explicit rule here guards against future theme changes. */
+/* 2. Ensure the interactive xarray HTML repr is always visible. */
 .md-content .xr-wrap {
   display: block !important;
 }
 
-/* MkDocs Material dark-mode support for xarray color variables.
-   xarray's embedded CSS resolves its --xr-* variables from Jupyter's
-   --jp-* variables (absent in MkDocs) with fallbacks intended for the
-   pydata-sphinx-theme (--pst-* variables, also absent in MkDocs).
-   The rules below map those variables to the nearest Material equivalents
-   so that the xarray widget looks reasonable in both light and dark mode. */
+/* 3. Restore the CSS Grid layout for the top-level sections list.
+      Material's ".md-typeset ul:not([hidden]) { display: flow-root }"
+      overrides xarray's "display: grid", collapsing the 8-column
+      variable table into a single stacked list.  We also clear the
+      unwanted left margin that Material adds to <ul> elements. */
+.md-content .xr-sections {
+  display: grid !important;
+  margin: 0 !important;
+}
+
+/* 4. Restore "display: contents" on the variable list <ul> so that its
+      children become direct grid items of the .xr-sections container.
+      Material overrides this to "display: flow-root" as well. */
+.md-content .xr-var-list {
+  display: contents !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* 5. Remove the unwanted left margin that Material adds to nested <ul>
+      elements inside the xarray widget (e.g. .xr-dim-list). */
+.md-content .xr-wrap ul {
+  margin-left: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+/* 6. MkDocs Material dark-mode support for xarray color variables.
+      xarray's embedded CSS resolves its --xr-* variables from Jupyter's
+      --jp-* variables (absent in MkDocs) with fallbacks intended for the
+      pydata-sphinx-theme (--pst-* variables, also absent in MkDocs).
+      The rules below map those variables to the nearest Material
+      equivalents so the xarray widget looks correct in light and dark mode. */
 .md-content {
   --xr-font-color0: var(--md-default-fg-color);
   --xr-font-color2: var(--md-default-fg-color--light);
