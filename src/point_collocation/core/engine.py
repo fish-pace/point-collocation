@@ -611,6 +611,11 @@ def _execute_plan(
                                 else:
                                     effective_spatial = "ndpoint"
                                     auto_1d_fallback = False
+                                if not silent:
+                                    print(
+                                        f"spatial_method='auto': using '{effective_spatial}' "
+                                        f"(lat/lon dims: {lat_var_check.ndim}-D)"
+                                    )
                             else:
                                 effective_spatial = spatial_method
                                 auto_1d_fallback = False

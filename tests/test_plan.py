@@ -2036,6 +2036,7 @@ class TestMatchupWithPlan:
             open_dataset_kwargs={"engine": "netcdf4"},
             silent=False,
             batch_size=1,
+            spatial_method="nearest",
         )
         captured = capsys.readouterr()
         lines = [ln for ln in captured.out.splitlines() if ln.strip()]
@@ -2581,7 +2582,8 @@ class TestNewOutputColumns:
 
         # With silent=False and default batch_size, only one progress line should appear
         # (all 3 granules processed in a single batch).
-        pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"}, silent=False)
+        pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"},
+                   silent=False, spatial_method="nearest")
         captured = capsys.readouterr()
         lines = [ln for ln in captured.out.strip().splitlines() if ln.strip()]
         assert len(lines) == 1, (
@@ -2697,6 +2699,7 @@ class TestGranuleRange:
             silent=False,
             batch_size=1,
             granule_range=(2, 3),
+            spatial_method="nearest",
         )
         captured = capsys.readouterr()
         lines = [ln for ln in captured.out.splitlines() if ln.strip()]
@@ -5274,6 +5277,91 @@ class TestAutoSpatialMethod:
             spatial_method="ndpoint", open_dataset_kwargs={"engine": "netcdf4"},
         )
         assert result_auto.loc[0, "sst"] == pytest.approx(result_ndpoint.loc[0, "sst"])
+
+    def test_auto_prints_resolved_method(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """auto prints a one-line message showing the resolved spatial method and dims."""
+        pytest.importorskip("scipy")
+        # Test 1-D path (nearest)
+        nc_path_1d = str(tmp_path / "grid.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(
+            nc_path_1d, engine="netcdf4"
+        )
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path_1d]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        pc.matchup(p, open_method="dataset", spatial_method="auto", silent=False,
+                   open_dataset_kwargs={"engine": "netcdf4"})
+        captured = capsys.readouterr()
+        assert "spatial_method='auto'" in captured.out
+        assert "'nearest'" in captured.out
+        assert "1-D" in captured.out
+
+        # Test 2-D path (ndpoint)
+        nc_path_2d = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=42)
+        ds_swath.to_netcdf(nc_path_2d, engine="netcdf4")
+        lat_val = float(ds_swath["lat"].values[0, 0])
+        lon_val = float(ds_swath["lon"].values[0, 0])
+        pts2 = pd.DataFrame(
+            {"lat": [lat_val], "lon": [lon_val], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p2 = Plan(
+            points=pts2,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        mock_ea.open.return_value = [nc_path_2d]
+        pc.matchup(p2, open_method="dataset", spatial_method="auto", silent=False,
+                   open_dataset_kwargs={"engine": "netcdf4"})
+        captured2 = capsys.readouterr()
+        assert "spatial_method='auto'" in captured2.out
+        assert "'ndpoint'" in captured2.out
+        assert "2-D" in captured2.out
+
+    def test_explicit_method_does_not_print_auto_message(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Explicit spatial_method does not emit the 'auto' selection message."""
+        nc_path = str(tmp_path / "grid.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(
+            nc_path, engine="netcdf4"
+        )
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        pc.matchup(p, open_method="dataset", spatial_method="nearest", silent=False,
+                   open_dataset_kwargs={"engine": "netcdf4"})
+        captured = capsys.readouterr()
+        assert "spatial_method='auto'" not in captured.out
 
     def test_auto_invalid_string_raises(self) -> None:
         """An unrecognised spatial_method string raises ValueError early."""
