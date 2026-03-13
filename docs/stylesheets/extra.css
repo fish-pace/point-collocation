@@ -78,3 +78,46 @@
 .md-content table.dataframe tbody tr:last-child th {
   border-bottom: 2px solid var(--md-primary-fg-color) !important;
 }
+
+/* -----------------------------------------------------------------------
+   xarray Dataset rendering in MkDocs documentation
+
+   The xarray HTML repr embeds its own <style> block with rules that are
+   designed for Jupyter notebooks.  The MkDocs Material theme's
+   higher-specificity CSS rules for <pre> elements can override xarray's
+   "display: none" on .xr-text-repr-fallback, causing both the plain-text
+   fallback and the interactive HTML repr to appear simultaneously.
+
+   These rules restore the intended behaviour within the MkDocs content
+   area: only the interactive HTML repr is shown, matching how the output
+   looks in a Jupyter notebook.
+   ----------------------------------------------------------------------- */
+
+/* Hide the plain-text fallback — the interactive HTML repr is shown instead. */
+.md-content .xr-text-repr-fallback {
+  display: none !important;
+}
+
+/* Ensure the interactive xarray HTML repr is always visible.  The xarray
+   <style> block already sets display:block !important on .xr-wrap, but an
+   explicit rule here guards against future theme changes. */
+.md-content .xr-wrap {
+  display: block !important;
+}
+
+/* MkDocs Material dark-mode support for xarray color variables.
+   xarray's embedded CSS resolves its --xr-* variables from Jupyter's
+   --jp-* variables (absent in MkDocs) with fallbacks intended for the
+   pydata-sphinx-theme (--pst-* variables, also absent in MkDocs).
+   The rules below map those variables to the nearest Material equivalents
+   so that the xarray widget looks reasonable in both light and dark mode. */
+.md-content {
+  --xr-font-color0: var(--md-default-fg-color);
+  --xr-font-color2: var(--md-default-fg-color--light);
+  --xr-font-color3: var(--md-default-fg-color--lighter);
+  --xr-border-color: var(--md-default-fg-color--lightest);
+  --xr-disabled-color: var(--md-default-fg-color--lighter);
+  --xr-background-color: var(--md-default-bg-color);
+  --xr-background-color-row-even: var(--md-default-bg-color);
+  --xr-background-color-row-odd: var(--md-code-bg-color);
+}
