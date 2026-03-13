@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 # Re-export geolocation pairs for callers that import them from this module.
 from point_collocation.core._open_method import _GEOLOC_PAIRS  # noqa: F401
 
-_VALID_SPATIAL_METHODS = {"nearest", "xoak"}
+_VALID_SPATIAL_METHODS = {"nearest", "xoak", "ndpoint"}
 
 # Time dimension names used as a fallback when cf_xarray is not installed or
 # when the dataset lacks CF-convention axis/units attributes.  Tried in order.
@@ -127,6 +127,10 @@ def matchup(
         ``ds.sel(..., method="nearest")`` and requires 1-D coordinates
         (gridded data).  ``"xoak"`` uses the ``xoak`` package for
         nearest-neighbour matching on 2-D (irregular/swath) grids.
+        ``"ndpoint"`` uses xarray's built-in
+        :class:`xarray.indexes.NDPointIndex` with the default
+        ``ScipyKDTreeAdapter`` — equivalent to ``"xoak"`` but without
+        requiring the ``xoak`` package (only ``scipy`` is needed).
         Defaults to ``"nearest"``.
     open_dataset_kwargs:
         Optional dictionary of keyword arguments forwarded to the xarray
@@ -206,6 +210,8 @@ def matchup(
     ImportError
         If ``spatial_method="xoak"`` and the ``xoak`` package is not
         installed.
+    ImportError
+        If ``spatial_method="ndpoint"`` and ``scipy`` is not installed.
     """
     if granule_range is not None:
         if (
@@ -238,6 +244,16 @@ def matchup(
             raise ImportError(
                 "The 'xoak' package (and scikit-learn) are required for spatial_method='xoak'. "
                 "Install them with: pip install xoak scikit-learn"
+            ) from exc
+
+    # Validate scipy is importable before we start processing granules.
+    if spatial_method == "ndpoint":
+        try:
+            from scipy.spatial import KDTree  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "The 'scipy' package is required for spatial_method='ndpoint'. "
+                "Install it with: pip install scipy"
             ) from exc
 
     # Normalize open_method to a full dict spec (raises ValueError on invalid input).
@@ -366,8 +382,9 @@ def _check_spatial_compat(
     """Raise if lat/lon dimensionality is incompatible with *spatial_method*.
 
     Only validates for ``spatial_method="nearest"``, which requires 1-D
-    coordinate arrays.  ``spatial_method="xoak"`` works with both 1-D and
-    2-D arrays and is not validated here.
+    coordinate arrays.  ``spatial_method="xoak"`` and
+    ``spatial_method="ndpoint"`` work with both 1-D and 2-D arrays and are
+    not validated here.
 
     Uses only metadata (``dims``) — does **not** load array data.
     """
@@ -385,7 +402,7 @@ def _check_spatial_compat(
             f"spatial_method='nearest' requires 1-D geolocation arrays, but found "
             f"{lon_name!r} with dims={tuple(lon_var.dims)} and "
             f"{lat_name!r} with dims={tuple(lat_var.dims)}. "
-            "Try spatial_method='xoak'."
+            "Try spatial_method='xoak' or spatial_method='ndpoint'."
         )
 
 
@@ -571,12 +588,12 @@ def _execute_plan(
                                 "Use plan.show_variables() to inspect the dataset."
                             )
 
-                        # For xoak with 1-D (gridded) lat/lon, pre-slice the dataset
+                        # For xoak/ndpoint with 1-D (gridded) lat/lon, pre-slice the dataset
                         # to the spatial extent of the query points before building
                         # the k-d tree.  A global granule with only a few scattered
-                        # points would otherwise cause xoak to index the entire global
+                        # points would otherwise cause the index to cover the entire global
                         # grid, which is very slow.
-                        if spatial_method == "xoak":
+                        if spatial_method in ("xoak", "ndpoint"):
                             lat_var = ds.coords[lat_name] if lat_name in ds.coords else ds[lat_name]
                             if lat_var.ndim == 1:
                                 pt_lats = [float(plan.points.loc[idx]["lat"]) for idx in pt_indices]
@@ -592,7 +609,7 @@ def _execute_plan(
                         # extraction functions can handle (time, lat, lon) variables.
                         time_dim = _find_time_dim(ds)
 
-                        if spatial_method == "xoak":
+                        if spatial_method in ("xoak", "ndpoint"):
                             # Build the k-d tree index once for all points in this
                             # granule instead of rebuilding it per point.  This
                             # dramatically reduces memory pressure and speeds up
@@ -604,7 +621,10 @@ def _execute_plan(
                                 row["granule_id"] = gm.granule_id
                                 row["granule_time"] = granule_time
                                 rows_for_granule.append(row)
-                            _extract_xoak_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim)
+                            if spatial_method == "xoak":
+                                _extract_xoak_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim)
+                            else:
+                                _extract_ndpoint_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim)
                             output_rows.extend(rows_for_granule)
                             batch_rows.extend(rows_for_granule)
                         else:
@@ -1004,6 +1024,129 @@ def _extract_xoak_batch(
         [lat_name, lon_name],
         xr.indexes.NDPointIndex,
         tree_adapter_cls=SklearnKDTreeAdapter,
+    )
+
+    # Build the target dataset with all query points at once.
+    lats = [row["lat"] for row in rows]
+    lons = [row["lon"] for row in rows]
+    target = xr.Dataset(
+        {
+            lat_name: xr.DataArray(lats),
+            lon_name: xr.DataArray(lons),
+        }
+    )
+    # The auto-generated dimension name for the query coordinate array
+    # (e.g. 'dim_0') is used to index individual results per point.
+    query_dim = target[lat_name].dims[0]
+
+    try:
+        selected = indexed_ds.sel(
+            {lat_name: target[lat_name], lon_name: target[lon_name]},
+            method="nearest",
+        )
+        # Extract matched granule coordinates for each query point.
+        try:
+            matched_lats = selected.coords[lat_name].values
+            matched_lons = selected.coords[lon_name].values
+            for i, row in enumerate(rows):
+                row["granule_lat"] = float(matched_lats[i])
+                row["granule_lon"] = float(matched_lons[i])
+        except Exception:
+            for row in rows:
+                row["granule_lat"] = float("nan")
+                row["granule_lon"] = float("nan")
+
+        for var in variables:
+            try:
+                var_data = selected[var]
+                for i, row in enumerate(rows):
+                    # Extract the i-th query point.  After sel() the query
+                    # dimension is prepended; squeeze removes any remaining
+                    # size-1 spatial dims so extra dims (e.g. wavelength) are
+                    # kept intact.
+                    point_data = var_data.isel({query_dim: i}).squeeze()
+                    if time_dim is not None:
+                        point_data = _select_time(point_data, time_dim, row.get("time"))
+                    if point_data.ndim == 0:
+                        row[var] = float(point_data)
+                    else:
+                        # Additional dimensions (e.g. wavelength) — expand
+                        # into coord-keyed columns (Rrs_346, Rrs_348, …).
+                        row[var] = float("nan")  # placeholder; removed later
+                        for coord_val, val in point_data.to_series().items():
+                            row[f"{var}_{int(coord_val)}"] = float(val)
+            except Exception:
+                for r in rows:
+                    r[var] = float("nan")
+    except Exception:
+        for row in rows:
+            row["granule_lat"] = float("nan")
+            row["granule_lon"] = float("nan")
+        for var in variables:
+            for r in rows:
+                r[var] = float("nan")
+
+
+def _extract_ndpoint_batch(
+    ds: xr.Dataset,
+    rows: list[dict],
+    variables: list[str],
+    lon_name: str,
+    lat_name: str,
+    time_dim: str | None = None,
+) -> None:
+    """Extract values for all *rows* using xarray's built-in NDPointIndex.
+
+    Builds the k-d tree index **once** for the entire dataset using xarray's
+    built-in ``ScipyKDTreeAdapter`` (no ``xoak`` dependency required — only
+    ``scipy``), then queries all points simultaneously.
+
+    This function mirrors :func:`_extract_xoak_batch` in logic and memory
+    containment strategy, but uses :class:`xarray.indexes.NDPointIndex`
+    without a custom tree adapter so that ``xoak`` is not required.
+
+    Modifies each dict in *rows* in-place.
+
+    Parameters
+    ----------
+    time_dim:
+        Name of the time dimension in *ds*, as detected by
+        :func:`_find_time_dim`.  When not ``None``, each variable is
+        squeezed or nearest-selected along this dimension after spatial
+        selection so that the result is always free of the time axis.
+    """
+    if not rows:
+        return
+
+    # Compute coordinate arrays if they are lazy (dask) — building a k-d
+    # tree requires all values to be in memory.
+    # Use a shallow copy so we only copy metadata, not data arrays.
+    ds_work = ds.copy(deep=False)
+    if lat_name in ds_work.coords and hasattr(ds_work.coords[lat_name].data, "compute"):
+        ds_work[lat_name] = ds_work.coords[lat_name].compute()
+    if lon_name in ds_work.coords and hasattr(ds_work.coords[lon_name].data, "compute"):
+        ds_work[lon_name] = ds_work.coords[lon_name].compute()
+
+    # NDPointIndex requires lat and lon to share the same dimensions.  For
+    # regular grid data (1-D lat/lon with separate dimensions), broadcast both
+    # coordinates to a common 2-D meshgrid so that the joint index can be built.
+    # Without this step, set_xindex() would raise because the two 1-D arrays
+    # each have their own dimension (e.g. 'lat' vs 'lon') and NDPointIndex
+    # needs all indexed coordinates to be defined over the same set of dims.
+    lat_arr = ds_work.coords[lat_name] if lat_name in ds_work.coords else ds_work[lat_name]
+    lon_arr = ds_work.coords[lon_name] if lon_name in ds_work.coords else ds_work[lon_name]
+    if lat_arr.ndim == 1 and lon_arr.ndim == 1:
+        lat_2d, lon_2d = np.meshgrid(lat_arr.values, lon_arr.values, indexing="ij")
+        lat_dims = lat_arr.dims + lon_arr.dims  # e.g. ('lat', 'lon')
+        ds_work[lat_name] = xr.DataArray(lat_2d, dims=lat_dims)
+        ds_work[lon_name] = xr.DataArray(lon_2d, dims=lat_dims)
+
+    # Build the NDPointIndex once for all query points using the built-in
+    # scipy adapter (ScipyKDTreeAdapter).  No tree_adapter_cls argument is
+    # passed so xarray's default applies.
+    indexed_ds = ds_work.set_xindex(
+        [lat_name, lon_name],
+        xr.indexes.NDPointIndex,
     )
 
     # Build the target dataset with all query points at once.

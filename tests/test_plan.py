@@ -4780,6 +4780,311 @@ class TestXoakSpatialMethod:
         assert sliced.sizes["lon"] < ds.sizes["lon"]
 
 
+class TestMissingNdpoint:
+    """Test that missing scipy raises a clear ImportError for spatial_method='ndpoint'."""
+
+    def test_ndpoint_import_error_raised_early(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """matchup() raises ImportError for ndpoint before opening any granule."""
+        import sys
+
+        # Block the scipy.spatial submodule import.
+        for key in list(sys.modules.keys()):
+            if key == "scipy" or key.startswith("scipy."):
+                monkeypatch.delitem(sys.modules, key)
+        monkeypatch.setitem(sys.modules, "scipy", None)  # type: ignore[assignment]
+        monkeypatch.setitem(sys.modules, "scipy.spatial", None)  # type: ignore[assignment]
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        with pytest.raises(ImportError, match="scipy"):
+            pc.matchup(p, spatial_method="ndpoint")
+
+
+class TestNdpointSpatialMethod:
+    """Tests for spatial_method='ndpoint' (xarray built-in NDPointIndex with scipy)."""
+
+    def test_swath_matchup_returns_nearest_value(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Swath matchup using ndpoint returns the nearest pixel value."""
+        pytest.importorskip("scipy")
+
+        nc_path = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=42)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        lat_val = float(ds_swath["lat"].values[0, 0])
+        lon_val = float(ds_swath["lon"].values[0, 0])
+
+        pts = pd.DataFrame(
+            {
+                "lat": [lat_val],
+                "lon": [lon_val],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/swath.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            open_method="datatree-merge",
+            variables=["sst"],
+            spatial_method="ndpoint",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert "sst" in result.columns
+        assert len(result) == 1
+        assert not math.isnan(result.loc[0, "sst"])
+
+    def test_swath_matchup_3d_variable_expands(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Swath matchup with ndpoint expands 3-D variables (e.g. Rrs) into per-wavelength columns."""
+        pytest.importorskip("scipy")
+
+        wavelengths = [346, 348, 351]
+        nc_path = str(tmp_path / "swath_3d.nc")
+        ds_swath = _make_l2_swath_3d_dataset(nrows=4, ncols=5, wavelengths=wavelengths, seed=42)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        lat_val = float(ds_swath["lat"].values[0, 0])
+        lon_val = float(ds_swath["lon"].values[0, 0])
+
+        pts = pd.DataFrame(
+            {
+                "lat": [lat_val],
+                "lon": [lon_val],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/swath_3d.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            open_method="datatree-merge",
+            variables=["Rrs"],
+            spatial_method="ndpoint",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert "Rrs" not in result.columns, "bare 'Rrs' column should be dropped after expansion"
+        for wl in wavelengths:
+            assert f"Rrs_{wl}" in result.columns, f"Rrs_{wl} column missing"
+        assert len(result) == 1
+
+    def test_grid_matchup_returns_nearest_value(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_method='dataset' + spatial_method='ndpoint' returns the nearest grid value."""
+        pytest.importorskip("scipy")
+
+        lats = [-90.0, 0.0, 90.0]
+        lons = [-180.0, 0.0, 180.0]
+        nc_path = str(tmp_path / "grid.nc")
+        _make_l3_dataset(lats, lons, seed=7).to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0],
+                "lon": [0.0],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/grid.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            variables=["sst"],
+            spatial_method="ndpoint",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert "sst" in result.columns
+        assert len(result) == 1
+        assert not math.isnan(result.loc[0, "sst"])
+
+    def test_multiple_points_same_granule(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple query points mapped to the same granule processed via a single k-d tree."""
+        pytest.importorskip("scipy")
+
+        nc_path = str(tmp_path / "swath_multi.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=7)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        lat0 = float(ds_swath["lat"].values[0, 0])
+        lon0 = float(ds_swath["lon"].values[0, 0])
+        lat1 = float(ds_swath["lat"].values[2, 3])
+        lon1 = float(ds_swath["lon"].values[2, 3])
+
+        pts = pd.DataFrame(
+            {
+                "lat": [lat0, lat1],
+                "lon": [lon0, lon1],
+                "time": pd.to_datetime(["2023-06-01T12:00:00", "2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/swath_multi.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0], 1: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            open_method="datatree-merge",
+            variables=["sst"],
+            spatial_method="ndpoint",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert "sst" in result.columns
+        assert len(result) == 2
+        assert not result["sst"].isna().any()
+
+    def test_ndpoint_and_xoak_return_same_values(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ndpoint and xoak return identical nearest-neighbour values for the same query."""
+        pytest.importorskip("scipy")
+        pytest.importorskip("xoak")
+
+        nc_path = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=42)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        lat_val = float(ds_swath["lat"].values[1, 2])
+        lon_val = float(ds_swath["lon"].values[1, 2])
+
+        pts = pd.DataFrame(
+            {
+                "lat": [lat_val],
+                "lon": [lon_val],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/swath.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+
+        def make_plan() -> Plan:
+            return Plan(
+                points=pts,
+                results=[object()],
+                granules=[gm],
+                point_granule_map={0: [0]},
+                source_kwargs={"short_name": "TEST"},
+                time_buffer=pd.Timedelta(0),
+            )
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        result_ndpoint = pc.matchup(
+            make_plan(),
+            open_method="dataset",
+            variables=["sst"],
+            spatial_method="ndpoint",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        result_xoak = pc.matchup(
+            make_plan(),
+            open_method="dataset",
+            variables=["sst"],
+            spatial_method="xoak",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert result_ndpoint.loc[0, "sst"] == pytest.approx(result_xoak.loc[0, "sst"])
+
+
 class TestShowVariablesLayout:
     """Tests for plan.show_variables() with both open methods."""
 
