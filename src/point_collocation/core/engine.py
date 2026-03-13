@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 # Re-export geolocation pairs for callers that import them from this module.
 from point_collocation.core._open_method import _GEOLOC_PAIRS  # noqa: F401
 
-_VALID_SPATIAL_METHODS = {"nearest", "xoak", "ndpoint"}
+_VALID_SPATIAL_METHODS = {"nearest", "xoak", "ndpoint", "auto"}
 
 # Time dimension names used as a fallback when cf_xarray is not installed or
 # when the dataset lacks CF-convention axis/units attributes.  Tried in order.
@@ -123,15 +123,29 @@ def matchup(
         Raises :exc:`ValueError` if a requested variable is not found
         in the opened dataset.
     spatial_method:
-        Method used for spatial matching.  ``"nearest"`` uses
-        ``ds.sel(..., method="nearest")`` and requires 1-D coordinates
-        (gridded data).  ``"xoak"`` uses the ``xoak`` package for
-        nearest-neighbour matching on 2-D (irregular/swath) grids.
-        ``"ndpoint"`` uses xarray's built-in
-        :class:`xarray.indexes.NDPointIndex` with the default
-        ``ScipyKDTreeAdapter`` — equivalent to ``"xoak"`` but without
-        requiring the ``xoak`` package (only ``scipy`` is needed).
-        Defaults to ``"nearest"``.
+        Method used for spatial matching.
+
+        * ``"auto"`` *(default)* — automatically selects the best method
+          based on the dimensionality of the geolocation coordinates:
+
+          - **1-D coordinates** (regular/gridded data): uses ``"nearest"``
+            (``ds.sel(..., method="nearest")``).  If ``"nearest"`` fails for
+            any reason, falls back to ``"ndpoint"`` automatically.
+          - **2-D coordinates** (irregular/swath data): uses ``"ndpoint"``.
+
+          ``xoak`` is never selected automatically; set
+          ``spatial_method="xoak"`` explicitly if needed.
+
+        * ``"nearest"`` — ``ds.sel(..., method="nearest")`` directly.
+          Requires 1-D coordinate arrays; raises :exc:`ValueError` with a
+          suggestion to use ``"auto"`` or ``"ndpoint"`` for 2-D coordinates.
+        * ``"ndpoint"`` — xarray's built-in
+          :class:`xarray.indexes.NDPointIndex` with the default
+          ``ScipyKDTreeAdapter``.  Works with both 1-D and 2-D coordinate
+          arrays (requires ``scipy``).
+        * ``"xoak"`` — the ``xoak`` package's ``SklearnKDTreeAdapter``.
+          Works with both 1-D and 2-D arrays (requires ``xoak`` and
+          ``scikit-learn``).
     open_dataset_kwargs:
         Optional dictionary of keyword arguments forwarded to the xarray
         open function for every granule opened during the run.  These
@@ -228,7 +242,7 @@ def matchup(
             )
 
     if spatial_method is None:
-        spatial_method = "nearest"
+        spatial_method = "auto"
 
     if spatial_method not in _VALID_SPATIAL_METHODS:
         raise ValueError(
@@ -382,9 +396,9 @@ def _check_spatial_compat(
     """Raise if lat/lon dimensionality is incompatible with *spatial_method*.
 
     Only validates for ``spatial_method="nearest"``, which requires 1-D
-    coordinate arrays.  ``spatial_method="xoak"`` and
-    ``spatial_method="ndpoint"`` work with both 1-D and 2-D arrays and are
-    not validated here.
+    coordinate arrays.  ``spatial_method="xoak"``,
+    ``spatial_method="ndpoint"``, and ``spatial_method="auto"`` work with
+    both 1-D and 2-D arrays and are not validated here.
 
     Uses only metadata (``dims``) — does **not** load array data.
     """
@@ -402,7 +416,8 @@ def _check_spatial_compat(
             f"spatial_method='nearest' requires 1-D geolocation arrays, but found "
             f"{lon_name!r} with dims={tuple(lon_var.dims)} and "
             f"{lat_name!r} with dims={tuple(lat_var.dims)}. "
-            "Try spatial_method='xoak' or spatial_method='ndpoint'."
+            "Use spatial_method='auto' or spatial_method='ndpoint' for 2-D "
+            "(swath/irregular) coordinates."
         )
 
 
@@ -496,6 +511,14 @@ def _execute_plan(
     # Track whether we have already validated spatial compat on the first granule.
     spatial_checked = False
 
+    # For "auto" spatial_method, the effective method ("nearest" or "ndpoint")
+    # is determined on the first opened granule based on lat/lon dimensionality.
+    # For explicit methods this always equals spatial_method.
+    effective_spatial: str = spatial_method
+    # When auto resolves to "nearest" on 1-D data, allow one fallback to
+    # "ndpoint" per granule if nearest extraction fails.
+    auto_1d_fallback: bool = (spatial_method == "auto")
+
     # For "auto" open_method, probe only the first granule to determine whether
     # to use the "dataset" or "datatree" path, then reuse that resolved spec for
     # all subsequent granules (avoids redundant probing and ensures consistency).
@@ -570,9 +593,28 @@ def _execute_plan(
 
                 try:
                     with _open_as_flat_dataset(file_obj, spec) as (ds, lon_name, lat_name):  # type: ignore[arg-type]
-                        # Validate spatial method compatibility — once only.
+                        # Resolve the effective spatial method once, on the first
+                        # opened granule.  For "auto", we inspect the lat/lon
+                        # dimensionality here; for explicit methods we just
+                        # validate compatibility.
                         if not spatial_checked:
-                            _check_spatial_compat(ds, lon_name, lat_name, spatial_method)
+                            if spatial_method == "auto":
+                                lat_var_check = (
+                                    ds.coords[lat_name]
+                                    if lat_name in ds.coords
+                                    else ds[lat_name]
+                                )
+                                if lat_var_check.ndim == 1:
+                                    effective_spatial = "nearest"
+                                    # auto_1d_fallback already True; keep it so
+                                    # that a nearest failure falls back to ndpoint.
+                                else:
+                                    effective_spatial = "ndpoint"
+                                    auto_1d_fallback = False
+                            else:
+                                effective_spatial = spatial_method
+                                auto_1d_fallback = False
+                                _check_spatial_compat(ds, lon_name, lat_name, effective_spatial)
                             spatial_checked = True
 
                         # Validate that all requested variables exist in the dataset.
@@ -592,8 +634,9 @@ def _execute_plan(
                         # to the spatial extent of the query points before building
                         # the k-d tree.  A global granule with only a few scattered
                         # points would otherwise cause the index to cover the entire global
-                        # grid, which is very slow.
-                        if spatial_method in ("xoak", "ndpoint"):
+                        # grid, which is very slow.  Skip this step for "nearest" (1-D)
+                        # since it does not build an index.
+                        if effective_spatial in ("xoak", "ndpoint"):
                             lat_var = ds.coords[lat_name] if lat_name in ds.coords else ds[lat_name]
                             if lat_var.ndim == 1:
                                 pt_lats = [float(plan.points.loc[idx]["lat"]) for idx in pt_indices]
@@ -609,7 +652,7 @@ def _execute_plan(
                         # extraction functions can handle (time, lat, lon) variables.
                         time_dim = _find_time_dim(ds)
 
-                        if spatial_method in ("xoak", "ndpoint"):
+                        if effective_spatial in ("xoak", "ndpoint"):
                             # Build the k-d tree index once for all points in this
                             # granule instead of rebuilding it per point.  This
                             # dramatically reduces memory pressure and speeds up
@@ -621,10 +664,49 @@ def _execute_plan(
                                 row["granule_id"] = gm.granule_id
                                 row["granule_time"] = granule_time
                                 rows_for_granule.append(row)
-                            if spatial_method == "xoak":
+                            if effective_spatial == "xoak":
                                 _extract_xoak_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim)
                             else:
                                 _extract_ndpoint_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim)
+                            output_rows.extend(rows_for_granule)
+                            batch_rows.extend(rows_for_granule)
+                        elif auto_1d_fallback:
+                            # auto resolved to "nearest" on 1-D coords.  Try
+                            # nearest for each point; if it fails, fall back to
+                            # ndpoint for the whole granule (and all future ones).
+                            def _make_row(pt_idx: object) -> dict:
+                                r = plan.points.loc[pt_idx].to_dict()
+                                r["pc_id"] = pt_idx
+                                r["granule_id"] = gm.granule_id
+                                r["granule_time"] = granule_time
+                                return r
+
+                            rows_for_granule = [_make_row(idx) for idx in pt_indices]
+                            try:
+                                for row in rows_for_granule:
+                                    _extract_nearest(ds, row, variables, lon_name, lat_name, time_dim)
+                            except Exception as _nearest_exc:
+                                # nearest failed; rebuild clean rows and retry with ndpoint.
+                                rows_for_granule = [_make_row(idx) for idx in pt_indices]
+                                # Apply slicing for ndpoint on 1-D coords.
+                                pt_lats = [float(plan.points.loc[idx]["lat"]) for idx in pt_indices]
+                                pt_lons = [float(plan.points.loc[idx]["lon"]) for idx in pt_indices]
+                                ds_nd = _slice_grid_to_points(ds, pt_lats, pt_lons, lat_name, lon_name)
+                                try:
+                                    _extract_ndpoint_batch(
+                                        ds_nd, rows_for_granule, variables, lon_name, lat_name, time_dim
+                                    )
+                                    # ndpoint succeeded — switch all future granules to ndpoint.
+                                    effective_spatial = "ndpoint"
+                                    auto_1d_fallback = False
+                                except Exception as nd_exc:
+                                    raise ValueError(
+                                        "spatial_method='auto' tried both 'nearest' and 'ndpoint' "
+                                        "for a granule with 1-D lat/lon coordinates, but both "
+                                        "failed.  Check that the dataset has valid geolocation "
+                                        f"coordinates.  'nearest' error: {_nearest_exc!r}; "
+                                        f"'ndpoint' error: {nd_exc!r}"
+                                    ) from nd_exc
                             output_rows.extend(rows_for_granule)
                             batch_rows.extend(rows_for_granule)
                         else:

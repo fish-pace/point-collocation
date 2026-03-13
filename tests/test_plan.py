@@ -4259,6 +4259,32 @@ class TestSpatialCompatCheck:
         with pytest.raises(ValueError, match="spatial_method='nearest'"):
             _check_spatial_compat(ds, "lon", "lat", "nearest")
 
+    def test_nearest_2d_error_mentions_auto(self) -> None:
+        from point_collocation.core.engine import _check_spatial_compat
+
+        ds = xr.Dataset(
+            {
+                "lon": (["nrows", "ncols"], [[0.0]]),
+                "lat": (["nrows", "ncols"], [[0.0]]),
+            }
+        )
+        with pytest.raises(ValueError, match="auto"):
+            _check_spatial_compat(ds, "lon", "lat", "nearest")
+
+    def test_auto_any_dims_ok(self) -> None:
+        from point_collocation.core.engine import _check_spatial_compat
+
+        ds_2d = xr.Dataset(
+            {
+                "lon": (["nrows", "ncols"], [[0.0]]),
+                "lat": (["nrows", "ncols"], [[0.0]]),
+            }
+        )
+        ds_1d = xr.Dataset(coords={"lon": [0.0], "lat": [0.0]})
+        # "auto" should never raise from _check_spatial_compat
+        _check_spatial_compat(ds_2d, "lon", "lat", "auto")
+        _check_spatial_compat(ds_1d, "lon", "lat", "auto")
+
     def test_xoak_any_dims_ok(self) -> None:
         from point_collocation.core.engine import _check_spatial_compat
 
@@ -5083,6 +5109,255 @@ class TestNdpointSpatialMethod:
         )
 
         assert result_ndpoint.loc[0, "sst"] == pytest.approx(result_xoak.loc[0, "sst"])
+
+
+class TestAutoSpatialMethod:
+    """Tests for spatial_method='auto' (default): dim-based routing + nearest→ndpoint fallback."""
+
+    def _make_granule_meta(self) -> "GranuleMeta":
+        return GranuleMeta(
+            granule_id="https://example.com/test.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+
+    def test_auto_is_default(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Calling matchup() without spatial_method uses 'auto' (1-D coords → nearest)."""
+        pytest.importorskip("scipy")
+        nc_path = str(tmp_path / "grid.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        # No spatial_method → should default to "auto" and succeed with 1-D coords
+        result = pc.matchup(p, open_method="dataset", variables=["sst"],
+                            open_dataset_kwargs={"engine": "netcdf4"})
+        assert "sst" in result.columns
+        assert not math.isnan(result.loc[0, "sst"])
+
+    def test_auto_1d_routes_to_nearest(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """auto with 1-D coords routes to 'nearest' (no scipy/xoak required)."""
+        nc_path = str(tmp_path / "grid.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=5).to_netcdf(
+            nc_path, engine="netcdf4"
+        )
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        # auto + 1D coords → should produce the same result as explicit nearest
+        result_auto = pc.matchup(
+            p, open_method="dataset", variables=["sst"],
+            spatial_method="auto", open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        mock_ea.open.return_value = [nc_path]
+        p2 = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        result_nearest = pc.matchup(
+            p2, open_method="dataset", variables=["sst"],
+            spatial_method="nearest", open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert result_auto.loc[0, "sst"] == pytest.approx(result_nearest.loc[0, "sst"])
+
+    def test_auto_2d_routes_to_ndpoint(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """auto with 2-D coords routes to 'ndpoint' (scipy required)."""
+        pytest.importorskip("scipy")
+        nc_path = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=42)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        lat_val = float(ds_swath["lat"].values[0, 0])
+        lon_val = float(ds_swath["lon"].values[0, 0])
+
+        pts = pd.DataFrame(
+            {
+                "lat": [lat_val],
+                "lon": [lon_val],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            }
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        result = pc.matchup(
+            p, open_method="datatree-merge", variables=["sst"],
+            spatial_method="auto", open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert "sst" in result.columns
+        assert len(result) == 1
+        assert not math.isnan(result.loc[0, "sst"])
+
+    def test_auto_2d_matches_ndpoint(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """auto with 2-D coords returns the same value as explicit ndpoint."""
+        pytest.importorskip("scipy")
+        nc_path = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=77)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        lat_val = float(ds_swath["lat"].values[1, 2])
+        lon_val = float(ds_swath["lon"].values[1, 2])
+
+        pts = pd.DataFrame(
+            {"lat": [lat_val], "lon": [lon_val], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+
+        def make_plan() -> Plan:
+            return Plan(
+                points=pts,
+                results=[object()],
+                granules=[self._make_granule_meta()],
+                point_granule_map={0: [0]},
+                source_kwargs={"short_name": "TEST"},
+                time_buffer=pd.Timedelta(0),
+            )
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        result_auto = pc.matchup(
+            make_plan(), open_method="dataset", variables=["sst"],
+            spatial_method="auto", open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        mock_ea.open.return_value = [nc_path]  # reset: _execute_plan nulls the list in-place
+        result_ndpoint = pc.matchup(
+            make_plan(), open_method="dataset", variables=["sst"],
+            spatial_method="ndpoint", open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert result_auto.loc[0, "sst"] == pytest.approx(result_ndpoint.loc[0, "sst"])
+
+    def test_auto_invalid_string_raises(self) -> None:
+        """An unrecognised spatial_method string raises ValueError early."""
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        with pytest.raises(ValueError, match="spatial_method"):
+            pc.matchup(p, spatial_method="bogus")
+
+    def test_explicit_nearest_with_2d_raises_useful_message(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit nearest with 2-D coords raises ValueError mentioning 'auto'/'ndpoint'."""
+        nc_path = str(tmp_path / "swath.nc")
+        _make_l2_swath_dataset(nrows=4, ncols=5).to_netcdf(nc_path, engine="netcdf4")
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        with pytest.raises(ValueError, match="auto"):
+            pc.matchup(
+                p, open_method="dataset", spatial_method="nearest",
+                open_dataset_kwargs={"engine": "netcdf4"},
+            )
+
+    def test_auto_xoak_never_selected(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """auto never picks xoak even if xoak is installed; xoak must be explicit."""
+        pytest.importorskip("scipy")
+        nc_path = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=10)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        lat_val = float(ds_swath["lat"].values[0, 0])
+        lon_val = float(ds_swath["lon"].values[0, 0])
+        pts = pd.DataFrame(
+            {"lat": [lat_val], "lon": [lon_val], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        # Block xoak — auto should still succeed via ndpoint
+        import sys
+        for key in list(sys.modules.keys()):
+            if key == "xoak" or key.startswith("xoak."):
+                monkeypatch.delitem(sys.modules, key)
+        monkeypatch.setitem(sys.modules, "xoak", None)  # type: ignore[assignment]
+        monkeypatch.setitem(sys.modules, "xoak.tree_adapters", None)  # type: ignore[assignment]
+
+        result = pc.matchup(
+            p, open_method="dataset", variables=["sst"],
+            spatial_method="auto", open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert "sst" in result.columns
+        assert not math.isnan(result.loc[0, "sst"])
 
 
 class TestShowVariablesLayout:
