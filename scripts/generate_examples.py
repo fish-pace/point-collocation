@@ -18,11 +18,16 @@ Adding a new docs_*.ipynb requires no other changes — just re-run this script
 """
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
 
 import yaml
+
+# GitHub repository slug (owner/repo).  Populated automatically by GitHub
+# Actions; falls back to an empty string when running locally.
+GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = ROOT / "examples"
@@ -46,6 +51,32 @@ _FIXED_NAV_FILES = {v for entry in _NAV_BEFORE_EXAMPLES + _NAV_AFTER_EXAMPLES fo
 
 # The quickstart page is always placed first in the Examples section.
 _QUICKSTART_MD = "quickstart.md"
+
+
+def _colab_badge(nb_path: Path) -> str:
+    """Return the HTML snippet for an "Open in Colab" badge, or '' if the
+    GitHub repository slug is not available (e.g. local runs)."""
+    if not GITHUB_REPOSITORY:
+        return ""
+    nb_rel = nb_path.relative_to(ROOT).as_posix()  # e.g. examples/docs_quickstart.ipynb
+    url = (
+        f"https://colab.research.google.com/github/{GITHUB_REPOSITORY}"
+        # Docs are always deployed from the main branch; Colab links point there.
+        f"/blob/main/{nb_rel}"
+    )
+    return (
+        f'<a href="{url}">'
+        '<img src="https://colab.research.google.com/assets/colab-badge.svg" '
+        'alt="Open in Colab"></a>\n\n'
+    )
+
+
+def _prepend_colab_badge(md_path: Path, badge: str) -> None:
+    """Prepend *badge* to the markdown file at *md_path* (no-op if badge is empty)."""
+    if not badge:
+        return
+    content = md_path.read_text(encoding="utf-8")
+    md_path.write_text(badge + content, encoding="utf-8")
 
 
 def _notebook_title(nb_path: Path) -> str:
@@ -102,6 +133,7 @@ def convert_notebooks() -> list[dict]:
         if result.returncode != 0:
             print(f"ERROR: failed to convert {nb.name}\n{result.stderr}", flush=True)
             raise subprocess.CalledProcessError(result.returncode, result.args)
+        _prepend_colab_badge(DOCS_DIR / f"{stem}.md", _colab_badge(nb))
         # Only list in Examples if this file isn't already in the fixed nav.
         if md_file not in _FIXED_NAV_FILES:
             entry = {title: md_file}
