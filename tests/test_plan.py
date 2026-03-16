@@ -27,6 +27,7 @@ from point_collocation.core.plan import (
     _parse_time_buffer,
     _plan_normalise_time,
     _point_in_polygon,
+    _search_earthaccess,
     plan,
 )
 
@@ -279,16 +280,17 @@ class TestExtractGranuleMetaUsesDataLinks:
         meta = _extract_granule_meta(result, result_index=0)
         assert meta.granule_id == "https://https.example.com/granule.nc"
 
-    def test_falls_back_to_umm_when_data_links_empty(self) -> None:
-        """When data_links() returns [], fall back to UMM RelatedUrls."""
-        umm_url = "https://umm.example.com/granule.nc"
+    def test_forwards_data_links_kwargs(self) -> None:
+        """data_links_kwargs (access, in_region) are forwarded to data_links()."""
+        links_url = "s3://bucket/granule.nc"
 
         result = MagicMock()
-        result.__getitem__ = lambda _, key: {"umm": self._make_umm(umm_url)}[key]
-        result.data_links.return_value = []
+        result.__getitem__ = lambda _, key: {"umm": self._make_umm("https://umm.example.com/g.nc")}[key]
+        result.data_links.return_value = [links_url]
 
-        meta = _extract_granule_meta(result, result_index=0)
-        assert meta.granule_id == umm_url
+        meta = _extract_granule_meta(result, result_index=0, data_links_kwargs={"access": "direct", "in_region": True})
+        assert meta.granule_id == links_url
+        result.data_links.assert_called_once_with(access="direct", in_region=True)
 
     def test_falls_back_to_umm_when_no_data_links_method(self) -> None:
         """When result has no data_links() method, fall back to UMM RelatedUrls."""
@@ -298,86 +300,91 @@ class TestExtractGranuleMetaUsesDataLinks:
         meta = _extract_granule_meta(result, result_index=0)
         assert meta.granule_id == umm_url
 
-    def test_falls_back_to_s3_when_https_empty(self) -> None:
-        """When data_links() returns [] but data_links(access='direct') returns S3 links."""
+
+class TestSearchEarthaccessFiltering:
+    """_search_earthaccess must skip granules with empty data_links() and forward data_links kwargs."""
+
+    def _make_points(self) -> pd.DataFrame:
+        return pd.DataFrame({
+            "lat": [0.0],
+            "lon": [0.0],
+            "time": pd.to_datetime(["2024-01-01T00:00:00"]),
+        })
+
+    def _make_mock_result(self, url: str | None) -> MagicMock:
+        """Build a minimal mock earthaccess result."""
+        result = MagicMock()
+        result.__getitem__ = lambda _, key: {
+            "umm": {
+                "TemporalExtent": {
+                    "RangeDateTime": {
+                        "BeginningDateTime": "2024-01-01T00:00:00Z",
+                        "EndingDateTime": "2024-01-01T23:59:59Z",
+                    }
+                },
+                "SpatialExtent": {
+                    "HorizontalSpatialDomain": {
+                        "Geometry": {
+                            "BoundingRectangles": [{
+                                "WestBoundingCoordinate": -180.0,
+                                "SouthBoundingCoordinate": -90.0,
+                                "EastBoundingCoordinate": 180.0,
+                                "NorthBoundingCoordinate": 90.0,
+                            }]
+                        }
+                    }
+                },
+                "RelatedUrls": [{"Type": "GET DATA", "URL": url}] if url else [],
+            }
+        }[key]
+        result.data_links.return_value = [url] if url else []
+        return result
+
+    def test_granules_with_empty_data_links_are_excluded(self) -> None:
+        """Granules whose data_links() returns [] are silently excluded from the plan."""
+        good = self._make_mock_result("https://example.com/good.nc")
+        empty = self._make_mock_result(None)
+
+        with patch("earthaccess.search_data", return_value=[good, empty]):
+            results, metas = _search_earthaccess(
+                self._make_points(),
+                source_kwargs={"short_name": "TEST"},
+            )
+
+        assert len(results) == 1
+        assert len(metas) == 1
+        assert metas[0].granule_id == "https://example.com/good.nc"
+
+    def test_access_and_in_region_forwarded_to_data_links(self) -> None:
+        """'access' and 'in_region' from source_kwargs are passed to data_links()."""
         s3_url = "s3://bucket/granule.nc"
+        result = self._make_mock_result(None)
+        result.data_links.side_effect = lambda **kw: [s3_url] if kw.get("access") == "direct" else []
 
-        umm = {
-            "TemporalExtent": {
-                "RangeDateTime": {
-                    "BeginningDateTime": "2023-06-01T00:00:00Z",
-                    "EndingDateTime": "2023-06-01T23:59:59Z",
-                }
-            },
-            "SpatialExtent": {
-                "HorizontalSpatialDomain": {
-                    "Geometry": {
-                        "BoundingRectangles": [
-                            {
-                                "WestBoundingCoordinate": -180.0,
-                                "SouthBoundingCoordinate": -90.0,
-                                "EastBoundingCoordinate": 180.0,
-                                "NorthBoundingCoordinate": 90.0,
-                            }
-                        ]
-                    }
-                }
-            },
-            "RelatedUrls": [],
-        }
+        with patch("earthaccess.search_data", return_value=[result]):
+            results, metas = _search_earthaccess(
+                self._make_points(),
+                source_kwargs={"short_name": "TEST", "access": "direct"},
+            )
 
-        result = MagicMock()
-        result.__getitem__ = lambda _, key: {"umm": umm}[key]
-        result.data_links.side_effect = lambda access=None: [s3_url] if access == "direct" else []
+        assert len(results) == 1
+        assert metas[0].granule_id == s3_url
+        # Verify access="direct" was forwarded to data_links().
+        result.data_links.assert_called_with(access="direct")
 
-        meta = _extract_granule_meta(result, result_index=0)
-        assert meta.granule_id == s3_url
-        # Verify data_links(access="direct") was actually attempted.
-        result.data_links.assert_any_call(access="direct")
+    def test_access_and_in_region_not_passed_to_search_data(self) -> None:
+        """'access' and 'in_region' must not be forwarded to earthaccess.search_data()."""
+        result = self._make_mock_result("https://example.com/g.nc")
 
-    def test_falls_back_to_concept_id_when_no_related_urls(self) -> None:
-        """When data_links() returns [] and RelatedUrls is empty, use CMR concept-id.
+        with patch("earthaccess.search_data", return_value=[result]) as mock_search:
+            _search_earthaccess(
+                self._make_points(),
+                source_kwargs={"short_name": "TEST", "access": "direct", "in_region": True},
+            )
 
-        This matches the real-world scenario reported in the issue where
-        ``any(res.data_links() == [] for res in results)`` is True.
-        """
-        concept_id = "G2834307209-LARC_ASDC"
-
-        umm = {
-            "TemporalExtent": {
-                "RangeDateTime": {
-                    "BeginningDateTime": "2023-06-01T00:00:00Z",
-                    "EndingDateTime": "2023-06-01T23:59:59Z",
-                }
-            },
-            "SpatialExtent": {
-                "HorizontalSpatialDomain": {
-                    "Geometry": {
-                        "BoundingRectangles": [
-                            {
-                                "WestBoundingCoordinate": -180.0,
-                                "SouthBoundingCoordinate": -90.0,
-                                "EastBoundingCoordinate": 180.0,
-                                "NorthBoundingCoordinate": 90.0,
-                            }
-                        ]
-                    }
-                }
-            },
-            # No RelatedUrls at all — as seen in some CMR records.
-        }
-        meta_section = {"concept-id": concept_id}
-
-        result = MagicMock()
-        result.__getitem__ = lambda _, key: {"umm": umm, "meta": meta_section}[key]
-        # Both data_links() and data_links(access="direct") return empty.
-        result.data_links.return_value = []
-
-        meta = _extract_granule_meta(result, result_index=0)
-        assert meta.granule_id == concept_id
-        # Verify both data_links() and the S3 fallback were attempted.
-        result.data_links.assert_any_call()
-        result.data_links.assert_any_call(access="direct")
+        call_kwargs = mock_search.call_args[1]
+        assert "access" not in call_kwargs
+        assert "in_region" not in call_kwargs
 
 
 class TestGetBbox:
