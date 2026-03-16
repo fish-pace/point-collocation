@@ -6554,19 +6554,17 @@ class TestAutoAlignPhonyDims:
 class TestSuppressDaskProgress:
     """Tests for _suppress_dask_progress()."""
 
-    def test_suppresses_stdout_output(self) -> None:
+    def test_suppresses_stdout_output(self, capsys: pytest.CaptureFixture) -> None:
         """Output written to stdout inside the context is suppressed."""
-        import sys
-
         from point_collocation.core._open_method import _suppress_dask_progress
 
         with _suppress_dask_progress():
             print("this should be suppressed")
 
-        # If we reach here without error, the context manager worked.
-        # The print inside should not appear in captured output.
+        captured = capsys.readouterr()
+        assert "this should be suppressed" not in captured.out
 
-    def test_suppresses_stderr_output(self) -> None:
+    def test_suppresses_stderr_output(self, capsys: pytest.CaptureFixture) -> None:
         """Output written to stderr inside the context is suppressed."""
         import sys
 
@@ -6574,6 +6572,9 @@ class TestSuppressDaskProgress:
 
         with _suppress_dask_progress():
             print("stderr output", file=sys.stderr)
+
+        captured = capsys.readouterr()
+        assert "stderr output" not in captured.err
 
     def test_does_not_suppress_after_context(self, capsys: pytest.CaptureFixture) -> None:
         """Stdout/stderr are restored after the context exits."""
@@ -6595,10 +6596,13 @@ class TestSuppressDaskProgress:
             with _suppress_dask_progress():
                 raise RuntimeError("test error")
 
-    def test_context_is_reentrant(self) -> None:
+    def test_context_is_reentrant(self, capsys: pytest.CaptureFixture) -> None:
         """_suppress_dask_progress can be nested without error."""
         from point_collocation.core._open_method import _suppress_dask_progress
 
         with _suppress_dask_progress():
             with _suppress_dask_progress():
                 print("nested suppression")
+
+        captured = capsys.readouterr()
+        assert "nested suppression" not in captured.out

@@ -913,17 +913,18 @@ def _resolve_auto_spec(file_obj: object, spec: dict) -> dict:
 
     # --- Try the fast dataset path ---
     dataset_error: BaseException | None = None
+    ds_probe: xr.Dataset | None = None
     try:
         with _suppress_dask_progress():
             ds_probe = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
-        try:
-            _apply_coords(ds_probe, spec)
-        finally:
-            ds_probe.close()
+        _apply_coords(ds_probe, spec)
         _seek_back()
         return {**spec, "xarray_open": "dataset"}
     except Exception as exc:
         dataset_error = exc
+    finally:
+        if ds_probe is not None:
+            ds_probe.close()
 
     _seek_back()
 
@@ -1027,13 +1028,15 @@ def _open_as_flat_dataset(
                     except Exception:
                         pass
         else:
-            with _suppress_dask_progress():
-                ds = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+            ds_simple: xr.Dataset | None = None
             try:
-                ds, lon_name, lat_name = _apply_coords(ds, spec)
-                yield (ds, lon_name, lat_name)
+                with _suppress_dask_progress():
+                    ds_simple = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+                ds_simple, lon_name, lat_name = _apply_coords(ds_simple, spec)
+                yield (ds_simple, lon_name, lat_name)
             finally:
-                ds.close()
+                if ds_simple is not None:
+                    ds_simple.close()
 
     elif xarray_open == "datatree":
         dt = _open_datatree_fn(file_obj, effective_kwargs)
