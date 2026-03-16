@@ -20,7 +20,6 @@ from point_collocation.core.plan import (
     Plan,
     _extract_granule_meta,
     _get_bbox,
-    _get_data_url,
     _get_polygon_points,
     _get_umm,
     _match_points_to_granules,
@@ -203,31 +202,6 @@ class TestGetUmm:
             _get_umm({"foo": "bar"})
 
 
-class TestGetDataUrl:
-    def test_prefers_https(self) -> None:
-        umm = {
-            "RelatedUrls": [
-                {"Type": "GET DATA VIA DIRECT ACCESS", "URL": "s3://bucket/file.nc"},
-                {"Type": "GET DATA", "URL": "https://example.com/file.nc"},
-            ]
-        }
-        assert _get_data_url(umm) == "https://example.com/file.nc"
-
-    def test_falls_back_to_s3(self) -> None:
-        umm = {
-            "RelatedUrls": [
-                {"Type": "GET DATA VIA DIRECT ACCESS", "URL": "s3://bucket/file.nc"},
-                {"Type": "GET DATA", "URL": "s3://bucket/file.nc"},
-            ]
-        }
-        assert _get_data_url(umm).startswith("s3://")
-
-    def test_raises_when_no_get_data(self) -> None:
-        umm = {"RelatedUrls": [{"Type": "OTHER", "URL": "https://x.com/"}]}
-        with pytest.raises(ValueError):
-            _get_data_url(umm)
-
-
 class TestExtractGranuleMetaUsesDataLinks:
     """_extract_granule_meta must use result.data_links() for the granule URL."""
 
@@ -291,14 +265,6 @@ class TestExtractGranuleMetaUsesDataLinks:
         meta = _extract_granule_meta(result, result_index=0, data_links_kwargs={"access": "direct", "in_region": True})
         assert meta.granule_id == links_url
         result.data_links.assert_called_once_with(access="direct", in_region=True)
-
-    def test_falls_back_to_umm_when_no_data_links_method(self) -> None:
-        """When result has no data_links() method, fall back to UMM RelatedUrls."""
-        umm_url = "https://umm.example.com/granule.nc"
-        result = {"umm": self._make_umm(umm_url)}
-
-        meta = _extract_granule_meta(result, result_index=0)
-        assert meta.granule_id == umm_url
 
 
 class TestSearchEarthaccessFiltering:

@@ -880,13 +880,9 @@ def _extract_granule_meta(
     # controls which link type is used.  Results with no links are filtered
     # out by _search_earthaccess before this function is called.
     _link_kwargs: dict[str, Any] = data_links_kwargs or {}
-    if hasattr(result, "data_links"):
-        links: list[str] = result.data_links(**_link_kwargs)
-        https_links = [url for url in links if not url.startswith("s3://")]
-        granule_id: str = https_links[0] if https_links else links[0]
-    else:
-        # Fallback for fixture/serialised result objects that have no data_links().
-        granule_id = _get_data_url(umm)
+    links: list[str] = result.data_links(**_link_kwargs)
+    https_links = [url for url in links if not url.startswith("s3://")]
+    granule_id: str = https_links[0] if https_links else links[0]
 
     bbox = _get_bbox(umm)
     polygon = _get_polygon_points(umm)
@@ -925,27 +921,6 @@ def _get_umm(result: Any) -> dict[str, Any]:
 
     raise ValueError(
         f"Cannot extract UMM metadata from result of type {type(result).__name__!r}."
-    )
-
-
-def _get_data_url(umm: dict[str, Any]) -> str:
-    """Return the ``GET DATA`` URL from UMM ``RelatedUrls``.
-
-    Prefers non-S3 URLs (i.e., HTTPS) when both are available.
-    """
-    related_urls: list[dict[str, Any]] = umm.get("RelatedUrls", [])
-    # Prefer HTTPS GET DATA
-    for url_info in related_urls:
-        url = url_info.get("URL", "")
-        if url_info.get("Type") == "GET DATA" and not url.startswith("s3://"):
-            return url
-    # Fall back to any GET DATA URL (S3 included)
-    for url_info in related_urls:
-        if url_info.get("Type") == "GET DATA":
-            return url_info["URL"]
-    raise ValueError(
-        "No 'GET DATA' URL found in granule RelatedUrls. "
-        f"Available types: {[u.get('Type') for u in related_urls]}"
     )
 
 
