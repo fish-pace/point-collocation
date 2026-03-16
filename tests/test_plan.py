@@ -6549,3 +6549,60 @@ class TestAutoAlignPhonyDims:
         result = _safe_align_phony_dims([ds1, ds2])
         assert "y" in result[0].dims
         assert "x" in result[0].dims
+
+
+class TestSuppressDaskProgress:
+    """Tests for _suppress_dask_progress()."""
+
+    def test_suppresses_stdout_output(self, capsys: pytest.CaptureFixture) -> None:
+        """Output written to stdout inside the context is suppressed."""
+        from point_collocation.core._open_method import _suppress_dask_progress
+
+        with _suppress_dask_progress():
+            print("this should be suppressed")
+
+        captured = capsys.readouterr()
+        assert "this should be suppressed" not in captured.out
+
+    def test_suppresses_stderr_output(self, capsys: pytest.CaptureFixture) -> None:
+        """Output written to stderr inside the context is suppressed."""
+        import sys
+
+        from point_collocation.core._open_method import _suppress_dask_progress
+
+        with _suppress_dask_progress():
+            print("stderr output", file=sys.stderr)
+
+        captured = capsys.readouterr()
+        assert "stderr output" not in captured.err
+
+    def test_does_not_suppress_after_context(self, capsys: pytest.CaptureFixture) -> None:
+        """Stdout/stderr are restored after the context exits."""
+        from point_collocation.core._open_method import _suppress_dask_progress
+
+        with _suppress_dask_progress():
+            print("inside (suppressed)")
+
+        print("outside (not suppressed)")
+        captured = capsys.readouterr()
+        assert "outside (not suppressed)" in captured.out
+        assert "inside (suppressed)" not in captured.out
+
+    def test_propagates_exceptions(self) -> None:
+        """Exceptions raised inside the context are propagated normally."""
+        from point_collocation.core._open_method import _suppress_dask_progress
+
+        with pytest.raises(RuntimeError, match="test error"):
+            with _suppress_dask_progress():
+                raise RuntimeError("test error")
+
+    def test_context_is_reentrant(self, capsys: pytest.CaptureFixture) -> None:
+        """_suppress_dask_progress can be nested without error."""
+        from point_collocation.core._open_method import _suppress_dask_progress
+
+        with _suppress_dask_progress():
+            with _suppress_dask_progress():
+                print("nested suppression")
+
+        captured = capsys.readouterr()
+        assert "nested suppression" not in captured.out

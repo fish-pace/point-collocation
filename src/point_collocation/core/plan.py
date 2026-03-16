@@ -254,6 +254,7 @@ class Plan:
             _open_and_merge_dataset_groups,
             _open_datatree_fn,
             _resolve_auto_spec,
+            _suppress_dask_progress,
         )
 
         try:
@@ -320,7 +321,8 @@ class Plan:
                 # Dataset-based group merge: open each group and merge.
                 ds = _open_and_merge_dataset_groups(file_obj, spec, effective_kwargs)
             else:
-                ds = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+                with _suppress_dask_progress():
+                    ds = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
             try:
                 ds, _, _ = _apply_coords(ds, spec)
             except ValueError:
@@ -371,6 +373,7 @@ class Plan:
             _open_and_merge_dataset_groups,
             _open_as_flat_dataset,
             _open_datatree_fn,
+            _suppress_dask_progress,
         )
 
         try:
@@ -427,7 +430,8 @@ class Plan:
                 if not merged_datasets:
                     return xr.Dataset()
                 return xr.concat(merged_datasets, dim="granule")
-            return xr.open_mfdataset(file_objs, **effective_kwargs)  # type: ignore[arg-type]
+            with _suppress_dask_progress():
+                return xr.open_mfdataset(file_objs, **effective_kwargs)  # type: ignore[arg-type]
 
         raise ValueError(
             f"open_method['xarray_open']={xarray_open!r} is not valid for open_mfdataset."

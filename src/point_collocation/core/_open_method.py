@@ -36,6 +36,8 @@ Unknown keys raise a clear :exc:`ValueError` to prevent silent typos.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Generator
@@ -72,6 +74,38 @@ _DEFAULT_OPEN_KWARGS: dict = {
     "engine": "h5netcdf",
     "decode_timedelta": False,
 }
+
+
+# ---------------------------------------------------------------------------
+# Progress-suppression helper
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _suppress_dask_progress() -> Generator[None, None, None]:
+    """Suppress dask progress bar output during file-open operations.
+
+    When opening HE5/HDF5 files with ``chunks={}``, dask (or pqdm used
+    internally by earthaccess) may emit verbose progress bar output
+    (e.g. ``QUEUEING TASKS``, ``PROCESSING TASKS``, ``COLLECTING RESULTS``).
+    This context manager suppresses that output without affecting the data.
+
+    In a Jupyter environment it uses :func:`IPython.utils.io.capture_output`;
+    otherwise it redirects both ``stdout`` and ``stderr`` to ``/dev/null`` for
+    the duration of the open call.
+    """
+    try:
+        from IPython.utils import io as _ipy_io  # type: ignore[import]
+
+        with _ipy_io.capture_output():
+            yield
+        return
+    except ImportError:
+        pass
+
+    with open(os.devnull, "w") as _devnull:
+        with contextlib.redirect_stdout(_devnull), contextlib.redirect_stderr(_devnull):
+            yield
 
 
 # ---------------------------------------------------------------------------
@@ -575,13 +609,15 @@ def _open_and_merge_dataset_groups(
         group_paths = list(merge)
     else:
         # No merge requested — open the root dataset directly.
-        return xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+        with _suppress_dask_progress():
+            return xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
 
     opened: list[xr.Dataset] = []
     for path in group_paths:
         kwargs = {**effective_kwargs, "group": path}
         try:
-            ds = xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
+            with _suppress_dask_progress():
+                ds = xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
             if ds.data_vars:
                 opened.append(ds)
             else:
@@ -686,22 +722,23 @@ def _h5py_file_info(
 
 def _open_datatree_fn(file_obj: object, kwargs: dict) -> object:
     """Open *file_obj* as a DataTree using whichever API is available."""
-    try:
-        open_dt = xr.open_datatree  # type: ignore[attr-defined]
-        return open_dt(file_obj, **kwargs)  # type: ignore[arg-type]
-    except AttributeError:
-        pass
+    with _suppress_dask_progress():
+        try:
+            open_dt = xr.open_datatree  # type: ignore[attr-defined]
+            return open_dt(file_obj, **kwargs)  # type: ignore[arg-type]
+        except AttributeError:
+            pass
 
-    try:
-        import datatree  # type: ignore[import-untyped]
+        try:
+            import datatree  # type: ignore[import-untyped]
 
-        return datatree.open_datatree(file_obj, **kwargs)  # type: ignore[arg-type]
-    except ImportError as exc:
-        raise ImportError(
-            "open_method='datatree-merge' requires either xarray >= 2024.x (with "
-            "built-in DataTree support) or the 'datatree' package. "
-            "Install it with: pip install datatree"
-        ) from exc
+            return datatree.open_datatree(file_obj, **kwargs)  # type: ignore[arg-type]
+        except ImportError as exc:
+            raise ImportError(
+                "open_method='datatree-merge' requires either xarray >= 2024.x (with "
+                "built-in DataTree support) or the 'datatree' package. "
+                "Install it with: pip install datatree"
+            ) from exc
 
 
 def _merge_datatree_with_spec(dt: object, spec: dict) -> xr.Dataset:
@@ -876,13 +913,18 @@ def _resolve_auto_spec(file_obj: object, spec: dict) -> dict:
 
     # --- Try the fast dataset path ---
     dataset_error: BaseException | None = None
+    ds_probe: xr.Dataset | None = None
     try:
-        with xr.open_dataset(file_obj, **effective_kwargs) as ds:  # type: ignore[arg-type]
-            _apply_coords(ds, spec)
+        with _suppress_dask_progress():
+            ds_probe = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+        _apply_coords(ds_probe, spec)
         _seek_back()
         return {**spec, "xarray_open": "dataset"}
     except Exception as exc:
         dataset_error = exc
+    finally:
+        if ds_probe is not None:
+            ds_probe.close()
 
     _seek_back()
 
@@ -968,7 +1010,8 @@ def _open_as_flat_dataset(
                 for path in group_paths:
                     kwargs = {**effective_kwargs, "group": path}
                     try:
-                        ds_grp = xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
+                        with _suppress_dask_progress():
+                            ds_grp = xr.open_dataset(file_obj, **kwargs)  # type: ignore[arg-type]
                         if ds_grp.data_vars:
                             opened.append(ds_grp)
                         else:
@@ -985,9 +1028,15 @@ def _open_as_flat_dataset(
                     except Exception:
                         pass
         else:
-            with xr.open_dataset(file_obj, **effective_kwargs) as ds:  # type: ignore[arg-type]
-                ds, lon_name, lat_name = _apply_coords(ds, spec)
-                yield (ds, lon_name, lat_name)
+            ds_simple: xr.Dataset | None = None
+            try:
+                with _suppress_dask_progress():
+                    ds_simple = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+                ds_simple, lon_name, lat_name = _apply_coords(ds_simple, spec)
+                yield (ds_simple, lon_name, lat_name)
+            finally:
+                if ds_simple is not None:
+                    ds_simple.close()
 
     elif xarray_open == "datatree":
         dt = _open_datatree_fn(file_obj, effective_kwargs)
@@ -1032,7 +1081,8 @@ def _open_as_flat_dataset_auto(
 
     # --- Fast path: try xr.open_dataset ---
     try:
-        ds_fast = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
+        with _suppress_dask_progress():
+            ds_fast = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
         ds_fast, lon_name_fast, lat_name_fast = _apply_coords(ds_fast, spec)
     except Exception as exc:
         dataset_exc = exc
