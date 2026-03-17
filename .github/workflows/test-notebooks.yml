@@ -1,0 +1,81 @@
+name: Test Example Notebooks
+
+# Triggers:
+#   - Manually via "Run workflow" button in the Actions tab.
+#     This is the recommended trigger when working with draft releases:
+#     create a draft, then run the workflow manually, review the report,
+#     fix any issues, and repeat until all tests pass before publishing.
+#   - Automatically when a release or pre-release is published/created.
+#     Note: GitHub does not trigger workflows for draft-only release events,
+#     so manual dispatch is the correct approach while in draft state.
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ----------------------------------------------------------------
+      # Set up the full conda environment described in environment.yml.
+      # ----------------------------------------------------------------
+      - name: Set up conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          activate-environment: point-collocation-dev
+          miniforge-version: latest
+
+      # ----------------------------------------------------------------
+      # Install nbconvert (needed to execute notebooks).
+      # ----------------------------------------------------------------
+      - name: Install nbconvert
+        shell: bash -el {0}
+        run: pip install "nbconvert>=7.0"
+
+      # ----------------------------------------------------------------
+      # Write NASA Earthdata credentials so earthaccess can authenticate.
+      # The step is non-fatal so the tests still run (and report failures)
+      # even when the secrets are not available.
+      # ----------------------------------------------------------------
+      - name: Configure NASA Earthdata Login
+        continue-on-error: true
+        shell: bash -el {0}
+        env:
+          EARTHDATA_USER: ${{ secrets.EARTHDATA_USER }}
+          EARTHDATA_PASS: ${{ secrets.EARTHDATA_PASS }}
+        run: |
+          echo "machine urs.earthdata.nasa.gov login $EARTHDATA_USER password $EARTHDATA_PASS" > ~/.netrc
+          chmod 0600 ~/.netrc
+
+      # ----------------------------------------------------------------
+      # Run every docs_*.ipynb notebook and every public *.py script.
+      # The runner script never exits with a non-zero code so this step
+      # always succeeds and the report artifact is always uploaded.
+      # ----------------------------------------------------------------
+      - name: Run example tests
+        shell: bash -el {0}
+        run: python .github/scripts/test_examples.py
+
+      # ----------------------------------------------------------------
+      # Print the report to the workflow log for quick inspection.
+      # ----------------------------------------------------------------
+      - name: Display report
+        if: always()
+        run: cat notebook_test_report.md
+
+      # ----------------------------------------------------------------
+      # Upload the report as a downloadable artifact.
+      # ----------------------------------------------------------------
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebook-test-report
+          path: notebook_test_report.md
