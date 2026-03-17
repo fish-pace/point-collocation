@@ -878,8 +878,13 @@ def _resolve_auto_spec(file_obj: object, spec: dict) -> dict:
 
     Attempts the fast ``xr.open_dataset`` path first; if lat/lon can be
     identified, returns a copy of *spec* with ``"xarray_open"`` set to
-    ``"dataset"``.  On failure, falls back to the DataTree merge path and
-    returns a spec with ``"xarray_open"`` set to ``"datatree"``.
+    ``"dataset"`` and ``"merge"`` set to ``None``.
+
+    On failure, falls back to opening as a DataTree (with ``"merge": None``
+    so the raw DataTree is returned to the caller).  The caller is responsible
+    for specifying which groups to merge via an explicit dict spec, e.g.
+    ``open_method={'xarray_open': 'datatree', 'merge': ['group1', 'group2'],
+    'coords': {'lat': '...', 'lon': '...'}}``.
 
     *file_obj* is seeked back to position 0 after each probe attempt so that
     the caller can re-open it for actual data extraction.
@@ -929,26 +934,25 @@ def _resolve_auto_spec(file_obj: object, spec: dict) -> dict:
     _seek_back()
 
     # --- Try the DataTree path ---
-    # We only need the merged dataset to be non-empty — we don't require
-    # lat/lon to be unambiguously identifiable here, because the caller
-    # (plan.open_dataset / matchup engine) handles coordinate resolution
-    # separately with its own error handling.
+    # Return a raw DataTree (merge=None) — it is the caller's responsibility
+    # to specify which groups to merge and where the coords are via an explicit
+    # open_method dict.  We only need to verify that the file opens as a
+    # DataTree with at least one non-empty node.
     datatree_spec: dict = {
         **spec,
         "xarray_open": "datatree",
-        "merge": spec.get("merge", "all"),
-        "merge_kwargs": spec.get("merge_kwargs", {}),
+        "merge": None,
     }
     datatree_error: BaseException | None = None
     try:
         dt = _open_datatree_fn(file_obj, effective_kwargs)
         try:
-            ds = _merge_datatree_with_spec(dt, datatree_spec)
-            if not ds.data_vars and not ds.coords and not ds.dims:
-                raise ValueError(
-                    "DataTree merge produced an empty dataset (no variables, "
-                    "coordinates, or dimensions)."
-                )
+            has_data = any(
+                len(node.ds.data_vars) > 0 or len(node.ds.coords) > 0
+                for node in dt.subtree
+            )
+            if not has_data:
+                raise ValueError("DataTree has no data in any group.")
         finally:
             if hasattr(dt, "close"):
                 dt.close()
@@ -963,7 +967,7 @@ def _resolve_auto_spec(file_obj: object, spec: dict) -> dict:
         f"  Dataset attempt: {dataset_error!s}\n"
         f"  DataTree attempt: {datatree_error!s}\n"
         "Specify open_method='datatree-merge' or a dict spec to diagnose further."
-    ) from datatree_error
+    ) from None
 
 
 # ---------------------------------------------------------------------------
@@ -1140,7 +1144,7 @@ def _open_as_flat_dataset_auto(
                 f"  DataTree attempt: {dt_open_exc!s}\n"
                 "Specify open_method='datatree-merge' or a dict spec to "
                 "diagnose further."
-            ) from dt_open_exc
+            ) from None
 
         ds = _merge_datatree_with_spec(dt, datatree_spec)
         try:
@@ -1154,7 +1158,7 @@ def _open_as_flat_dataset_auto(
                 "Fix: specify open_method with explicit coords, e.g.\n"
                 "  open_method={'xarray_open': 'datatree', 'merge': 'all', "
                 "'coords': {'lat': 'VariableName', 'lon': 'VariableName'}}"
-            ) from coord_exc
+            ) from None
 
         yield (ds, lon_name, lat_name)
     finally:

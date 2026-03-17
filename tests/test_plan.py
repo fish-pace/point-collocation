@@ -3901,12 +3901,13 @@ class TestDatasetMerge:
 
 
 class TestAutoOpenMethodDatatreeFallback:
-    """Test that open_method='auto' falls back to datatree-merge for grouped
+    """Test that open_method='auto' falls back to datatree (merge=None) for grouped
     HDF5 files where the flat dataset is empty (root has no variables).
 
     Regression test for the PACE OCI L2 AOP case where:
     - xr.open_dataset → empty dataset (all vars in subgroups) → probe fails
-    - DataTree merge → non-empty dataset → probe succeeds → datatree used
+    - DataTree (merge=None) → has data in non-root nodes → probe succeeds
+    - Result is a raw DataTree; user must specify merge groups explicitly.
     """
 
     def _make_plan(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, nc_path: str) -> Plan:
@@ -3928,25 +3929,30 @@ class TestAutoOpenMethodDatatreeFallback:
     def test_open_dataset_auto_falls_back_to_datatree_for_pace_like_file(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """open_dataset(open_method='auto') uses datatree-merge for grouped files
-        whose root is empty (like PACE OCI L2 AOP).
+        """open_dataset(open_method='auto') returns a raw DataTree for grouped files
+        whose root is empty (like PACE OCI L2 AOP).  merge=None so the user can
+        inspect the groups and specify merge explicitly.
         """
         nc_path = str(tmp_path / "pace_like.nc")
         _make_pace_like_grouped_nc(nc_path)
         p = self._make_plan(tmp_path, monkeypatch, nc_path)
 
-        ds = p.open_dataset(p[0], open_method="auto", silent=True)
-        assert isinstance(ds, xr.Dataset)
-        # The merged dataset must contain the science variable and navigation vars
-        assert "Rrs" in ds.data_vars or "Rrs" in ds
-        assert "longitude" in ds.data_vars or "longitude" in ds.coords
-        assert "latitude" in ds.data_vars or "latitude" in ds.coords
+        result = p.open_dataset(p[0], open_method="auto", silent=True)
+        # Should return a DataTree (not a flat Dataset) since root is empty
+        assert isinstance(result, xr.DataTree)
+        # The navigation_data node must be accessible via the DataTree's subtree
+        nav_node = next(
+            (node for node in result.subtree if node.name == "navigation_data"), None
+        )
+        assert nav_node is not None, "Expected 'navigation_data' group in DataTree"
+        assert "longitude" in nav_node.ds.data_vars or "longitude" in nav_node.ds.coords
+        assert "latitude" in nav_node.ds.data_vars or "latitude" in nav_node.ds.coords
 
     def test_open_dataset_auto_prints_datatree_spec_for_pace_like_file(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ) -> None:
         """open_method='auto' prints a resolved spec with xarray_open='datatree'
-        for a grouped file, not 'dataset' or 'auto'.
+        and merge=None for a grouped file.
         """
         nc_path = str(tmp_path / "pace_like.nc")
         _make_pace_like_grouped_nc(nc_path)
@@ -3956,7 +3962,7 @@ class TestAutoOpenMethodDatatreeFallback:
         captured = capsys.readouterr()
         first_line = captured.out.splitlines()[0]
         assert "'xarray_open': 'datatree'" in first_line
-        assert "merge" in first_line
+        assert "'merge': None" in first_line
 
 
 # ---------------------------------------------------------------------------

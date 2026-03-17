@@ -521,7 +521,11 @@ class Plan:
         merge = spec.get("merge")
         if xarray_open == "datatree":
             dt = _open_datatree_fn(file_obj, effective_kwargs)
-            ds_flat = _merge_datatree_with_spec(dt, spec)
+            # For show_variables, always merge all groups for display — even
+            # when merge=None (raw DataTree mode) — so the user can see every
+            # variable in every group.
+            display_merge_spec = {**spec, "merge": merge if merge is not None else "all"}
+            ds_flat = _merge_datatree_with_spec(dt, display_merge_spec)
         elif xarray_open == "dataset" and merge is not None:
             ds_flat = _open_and_merge_dataset_groups(file_obj, spec, effective_kwargs)
         else:
