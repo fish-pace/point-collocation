@@ -4072,6 +4072,89 @@ class TestAutoOpenMethodDatatreeFallback:
         assert "'xarray_open': 'datatree'" in first_line
         assert "'merge': None" in first_line
 
+    def test_open_dataset_auto_prints_switch_reason_for_grouped_file(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """open_method='auto' prints a switch reason when it falls back to datatree.
+
+        When the flat-dataset probe fails (e.g. no geolocation in root), the
+        resolved spec should be accompanied by a line explaining why the mode
+        was changed to 'datatree'.
+        """
+        nc_path = str(tmp_path / "pace_like.nc")
+        _make_pace_like_grouped_nc(nc_path)
+        p = self._make_plan(tmp_path, monkeypatch, nc_path)
+
+        p.open_dataset(p[0], open_method="auto")
+        captured = capsys.readouterr()
+        lines = captured.out.splitlines()
+        # A line explaining the reason for switching must appear
+        assert any("switched to 'datatree'" in line for line in lines), (
+            f"Expected switch-reason line in output:\n{captured.out}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Task 3: matchup() with open_method='datatree' (merge=None) must not crash
+# ---------------------------------------------------------------------------
+
+
+class TestMatchupDatatreeMergeNone:
+    """Test that open_method='datatree' (merge=None) uses the root dataset.
+
+    Previously _merge_datatree_with_spec raised ValueError for merge=None.
+    Now the datatree path in _open_as_flat_dataset uses dt.ds (root) directly.
+    """
+
+    def _make_plan(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        nc_path: str,
+    ) -> "Plan":
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        return Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+    def test_matchup_datatree_flat_file_does_not_raise_merge_none_error(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """matchup(open_method='datatree') on a flat NetCDF must not raise.
+
+        open_method='datatree' sets merge=None.  Previously this triggered:
+        ValueError: spec['merge']=None is not valid.
+        Now it uses the root dataset directly (dt.ds).
+        """
+        nc_path = str(tmp_path / "flat.nc")
+        _make_l3_dataset([-0.5, 0.0, 0.5], [-0.5, 0.0, 0.5]).to_netcdf(
+            nc_path, engine="netcdf4"
+        )
+        p = self._make_plan(tmp_path, monkeypatch, nc_path)
+        # Should not raise "spec['merge']=None is not valid"
+        result = pc.matchup(
+            p, variables=["sst"], open_method={"xarray_open": "datatree", "open_kwargs": {"engine": "netcdf4"}}
+        )
+        assert result is not None
+
 
 # ---------------------------------------------------------------------------
 # Task 4: matchup() variables kwarg and missing-variable error
@@ -4611,6 +4694,31 @@ class TestGeolocDetectionCfXarray:
         )
         with pytest.raises(ValueError, match="ambiguous geolocation variables"):
             _find_geoloc_pair(ds)
+
+    def test_cf_ambiguous_with_bnds_resolves_via_name_fallback(self) -> None:
+        """ECCO-like files: cf_xarray ambiguity (due to _bnds vars) falls back to name search.
+
+        ECCO files have ``longitude_bnds``/``latitude_bnds`` alongside
+        ``longitude``/``latitude``, all sharing the same CF standard_name.
+        cf_xarray reports this as ambiguous; the name-based fallback resolves to
+        ``('longitude', 'latitude')`` without error.
+        """
+        pytest.importorskip("cf_xarray")
+        from point_collocation.core.engine import _find_geoloc_pair
+
+        lon_std = {"standard_name": "longitude", "units": "degrees_east"}
+        lat_std = {"standard_name": "latitude", "units": "degrees_north"}
+        ds = xr.Dataset(
+            coords={
+                "longitude": xr.DataArray([0.0], attrs=lon_std),
+                "longitude_bnds": xr.DataArray([[-0.5, 0.5]], dims=["longitude", "nv"], attrs={"standard_name": "longitude"}),
+                "latitude": xr.DataArray([0.0], attrs=lat_std),
+                "latitude_bnds": xr.DataArray([[-0.5, 0.5]], dims=["latitude", "nv"], attrs={"standard_name": "latitude"}),
+            }
+        )
+        lon_name, lat_name = _find_geoloc_pair(ds)
+        assert lon_name == "longitude"
+        assert lat_name == "latitude"
 
     def test_cf_partial_detection_raises(self) -> None:
         """CF detects longitude but not latitude — should raise 'no geolocation'."""

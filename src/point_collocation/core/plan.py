@@ -292,9 +292,13 @@ class Plan:
             effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
 
         if not silent:
-            display_spec = {**spec, "open_kwargs": effective_kwargs}
+            display_spec = {k: v for k, v in spec.items() if not k.startswith("_")}
+            display_spec["open_kwargs"] = effective_kwargs
             display_spec.setdefault("merge", None)
             print(f"open_method: {display_spec!r}")
+            reason = spec.get("_auto_switch_reason")
+            if reason:
+                print(f"open_method='auto' switched to 'datatree': {reason}")
 
         if xarray_open == "datatree":
             merge = spec.get("merge")

@@ -351,9 +351,15 @@ def _find_geoloc_pair(ds: xr.Dataset) -> tuple[str, str]:
     ------------------
     1. **cf_xarray** (primary, if installed): inspects CF-convention
        attributes such as ``standard_name``, ``units``, and ``long_name``
-       in both ``ds.coords`` and ``ds.data_vars``.
+       in both ``ds.coords`` and ``ds.data_vars``.  When cf_xarray detects
+       exactly one longitude and one latitude variable the result is returned
+       immediately.  When cf_xarray detects *multiple* candidates (ambiguous),
+       the name-based fallback is tried next before raising.
     2. **Name-based fallback**: searches ``ds.coords`` and ``ds.data_vars``
        for each ``(lon_name, lat_name)`` pair in :data:`_GEOLOC_PAIRS`.
+       This resolves common cases such as ECCO NetCDF files that include
+       ``longitude_bnds``/``latitude_bnds`` alongside ``longitude``/
+       ``latitude`` (which confuse cf_xarray into reporting ambiguity).
 
     Returns
     -------
@@ -368,6 +374,8 @@ def _find_geoloc_pair(ds: xr.Dataset) -> tuple[str, str]:
     lon_names = _cf_geoloc_names(ds, "longitude")
     lat_names = _cf_geoloc_names(ds, "latitude")
 
+    cf_ambiguous_msg: str | None = None
+
     if lon_names or lat_names:
         if not lon_names or not lat_names:
             raise ValueError(
@@ -375,13 +383,15 @@ def _find_geoloc_pair(ds: xr.Dataset) -> tuple[str, str]:
                 f"cf_xarray detected longitude={lon_names}, latitude={lat_names}; "
                 "expected exactly one variable for each."
             )
-        if len(lon_names) > 1 or len(lat_names) > 1:
-            raise ValueError(
-                f"ambiguous geolocation variables; "
-                f"cf_xarray detected longitude={lon_names}, latitude={lat_names}. "
-                "Rename or drop the extra coordinates before running matchup."
-            )
-        return lon_names[0], lat_names[0]
+        if len(lon_names) == 1 and len(lat_names) == 1:
+            return lon_names[0], lat_names[0]
+        # cf_xarray detected multiple candidates — save the message and fall
+        # through to the name-based search to try to disambiguate.
+        cf_ambiguous_msg = (
+            f"ambiguous geolocation variables; "
+            f"cf_xarray detected longitude={lon_names}, latitude={lat_names}. "
+            "Rename or drop the extra coordinates before running matchup."
+        )
 
     found: list[tuple[str, str]] = []
     for lon_name, lat_name in _GEOLOC_PAIRS:
@@ -391,6 +401,8 @@ def _find_geoloc_pair(ds: xr.Dataset) -> tuple[str, str]:
             found.append((lon_name, lat_name))
 
     if len(found) == 0:
+        if cf_ambiguous_msg:
+            raise ValueError(cf_ambiguous_msg)
         raise ValueError(
             "no geolocation variables found. "
             "Expected one of the following (lon, lat) name pairs in ds.coords "
@@ -398,6 +410,8 @@ def _find_geoloc_pair(ds: xr.Dataset) -> tuple[str, str]:
             "Specify coords explicitly via open_method={'coords': {'lat': '...', 'lon': '...'}}."
         )
     if len(found) > 1:
+        if cf_ambiguous_msg:
+            raise ValueError(cf_ambiguous_msg)
         raise ValueError(
             f"ambiguous geolocation variables; detected pairs: {found}. "
             "The dataset contains more than one recognised (lon, lat) pair. "
@@ -967,6 +981,7 @@ def _resolve_auto_spec(file_obj: object, spec: dict) -> dict:
         **spec,
         "xarray_open": "datatree",
         "merge": None,
+        "_auto_switch_reason": str(dataset_error),
     }
     datatree_error: BaseException | None = None
     try:
@@ -1076,9 +1091,16 @@ def _open_as_flat_dataset(
                     ds_simple.close()
 
     elif xarray_open == "datatree":
+        merge = spec.get("merge")
         dt = _open_datatree_fn(file_obj, effective_kwargs)
         try:
-            ds = _merge_datatree_with_spec(dt, spec)
+            if merge is None:
+                # No merge requested — use the root dataset directly.
+                # For flat NetCDF files opened as DataTree the root node
+                # contains all variables, so this path works without merging.
+                ds = getattr(dt, "ds", xr.Dataset())
+            else:
+                ds = _merge_datatree_with_spec(dt, spec)
             ds, lon_name, lat_name = _apply_coords(ds, spec)
             yield (ds, lon_name, lat_name)
         finally:
