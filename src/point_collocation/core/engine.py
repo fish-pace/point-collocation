@@ -937,9 +937,9 @@ def _drop_nan_geoloc(
     reads those pixels it converts the fill value to NaN.  Passing NaN
     coordinates to scipy's or xoak's KD-tree raises a ``ValueError``.
     This helper stacks all spatial dimensions, removes the bad pixels,
-    and returns a dataset whose 1-D layout is safe for ``set_xindex()``
-    (xarray ≥ 2026.2 allows multiple coordinate variables to share a
-    single stacked dimension in ``NDPointIndex``).
+    and returns a dataset whose 1-D layout is safe for ``set_xindex()``.
+    Stacking requires xarray ≥ 2026.2 (``NDPointIndex`` support for
+    multiple coordinate variables sharing one dimension).
 
     If all coordinates are finite the dataset is returned unchanged.
     """
@@ -951,6 +951,24 @@ def _drop_nan_geoloc(
 
     if np.all(np.isfinite(lat_vals)) and np.all(np.isfinite(lon_vals)):
         return ds  # Fast path — nothing to do.
+
+    # NaN/Inf values detected — stacking is required.  NDPointIndex in
+    # xarray < 2026.2 cannot handle 2 coordinate variables on 1 stacked
+    # dimension and will raise a confusing ValueError.  Check the version
+    # now and exit with a clear message rather than letting xarray crash.
+    import importlib.metadata
+    from packaging.version import Version
+
+    _xarray_ver_str = importlib.metadata.version("xarray")
+    if Version(_xarray_ver_str) < Version("2026.2"):
+        raise RuntimeError(
+            "point-collocation: NaN/Inf values were found in the latitude or "
+            "longitude of this dataset (e.g. fill values outside the sensor "
+            "swath).  Removing those bad pixels requires stacking the spatial "
+            "dimensions, which in turn requires xarray ≥ 2026.2.  Please "
+            f"upgrade xarray (currently {_xarray_ver_str}):\n"
+            "    pip install 'xarray>=2026.2'"
+        )
 
     spatial_dims = lat_arr.dims
     stacked = ds.stack({"__pc__": spatial_dims}).reset_index("__pc__")

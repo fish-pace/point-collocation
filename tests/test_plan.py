@@ -5682,6 +5682,29 @@ class TestNdpointSpatialMethod:
         assert not math.isnan(result.loc[0, "sst"])
         assert result.loc[0, "sst"] == pytest.approx(expected_sst, rel=1e-4)
 
+    def test_swath_nan_geoloc_old_xarray_raises_helpful_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When NaN pixels are found and xarray < 2026.2, a clear RuntimeError is raised."""
+        pytest.importorskip("scipy")
+        import importlib.metadata as _meta
+
+        monkeypatch.setattr(_meta, "version", lambda pkg: "2025.07.1" if pkg == "xarray" else "0")
+
+        import numpy as np
+        import xarray as xr
+        from point_collocation.core.engine import _drop_nan_geoloc
+
+        lat = np.array([[1.0, 2.0], [np.nan, np.nan]], dtype=np.float32)
+        lon = np.array([[10.0, 20.0], [np.nan, np.nan]], dtype=np.float32)
+        ds = xr.Dataset(
+            {"sst": (["r", "c"], np.ones((2, 2)))},
+            coords={"lat": (["r", "c"], lat), "lon": (["r", "c"], lon)},
+        )
+
+        with pytest.raises(RuntimeError, match="xarray"):
+            _drop_nan_geoloc(ds, "lat", "lon")
+
 
 class TestAutoSpatialMethod:
     """Tests for spatial_method='auto' (default): dim-based routing + nearest→ndpoint fallback."""
