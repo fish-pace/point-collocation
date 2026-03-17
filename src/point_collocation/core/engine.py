@@ -925,13 +925,94 @@ def _slice_grid_to_points(
     return sliced
 
 
+def _slice_2d_to_points(
+    ds: xr.Dataset,
+    lats: list[float],
+    lons: list[float],
+    lat_name: str,
+    lon_name: str,
+    buffer_deg: float = 1.0,
+) -> xr.Dataset:
+    """Slice a 2-D irregular-grid (swath) dataset to the bbox of *lats*/*lons*.
+
+    Unlike :func:`_slice_grid_to_points` (which uses ``ds.sel`` on 1-D indexed
+    coordinates), this function handles 2-D swath/irregular data by computing a
+    per-pixel boolean mask and retaining rows and columns that contain at least
+    one pixel within the padded bounding box.  No stacking is required, so
+    there is no xarray version dependency.
+
+    This is a conservative filter: a row (or column) is kept if *any* of its
+    pixels falls within the bbox, which may include a small number of pixels
+    just outside the exact boundary.  That is acceptable and mirrors the
+    strategy used by :func:`_slice_grid_to_points` for regular grids.
+
+    Only applies to datasets with 2-D coordinate arrays (irregular/swath grids).
+    Returns *ds* unchanged for 1-D coordinates or if no pixels lie in the bbox.
+
+    Parameters
+    ----------
+    ds:
+        The dataset to slice.
+    lats, lons:
+        Latitudes and longitudes of the query points.
+    lat_name, lon_name:
+        Coordinate names detected by :func:`_find_geoloc_pair`.
+    buffer_deg:
+        Extra degrees to pad the bounding box on each side (default 1°).
+
+    Returns
+    -------
+    xr.Dataset
+        A subset of *ds* covering the padded bounding box, or *ds* unchanged
+        if the coordinates are not 2-D or no pixels lie in the bbox.
+    """
+    lat_coord = ds.coords.get(lat_name) if lat_name in ds.coords else ds.get(lat_name)
+    lon_coord = ds.coords.get(lon_name) if lon_name in ds.coords else ds.get(lon_name)
+
+    if lat_coord is None or lon_coord is None:
+        return ds
+    if lat_coord.ndim != 2:
+        return ds  # Only handles 2-D swath data; 1-D grids use _slice_grid_to_points.
+
+    lat_vals = np.asarray(lat_coord)
+    lon_vals = np.asarray(lon_coord)
+
+    min_lat = min(lats) - buffer_deg
+    max_lat = max(lats) + buffer_deg
+    min_lon = min(lons) - buffer_deg
+    max_lon = max(lons) + buffer_deg
+
+    # Build a per-pixel mask; ignore NaN/Inf pixels for the bbox check
+    # (those will be handled separately by _drop_nan_geoloc).
+    finite = np.isfinite(lat_vals) & np.isfinite(lon_vals)
+    in_bbox = (
+        finite
+        & (lat_vals >= min_lat) & (lat_vals <= max_lat)
+        & (lon_vals >= min_lon) & (lon_vals <= max_lon)
+    )
+
+    # Reduce to row and column masks by taking the OR across the other axis.
+    row_mask = in_bbox.any(axis=1)
+    col_mask = in_bbox.any(axis=0)
+
+    if not row_mask.any() or not col_mask.any():
+        # No pixel in bbox; return unchanged so the caller can emit NaN results.
+        return ds
+
+    dim0, dim1 = lat_coord.dims
+    sliced = ds.isel({dim0: row_mask, dim1: col_mask})
+
+    # Guard against a degenerate result.
+    if sliced.sizes.get(dim0, 0) == 0 or sliced.sizes.get(dim1, 0) == 0:
+        return ds
+
+    return sliced
+
+
 def _drop_nan_geoloc(
     ds: xr.Dataset,
     lat_name: str,
     lon_name: str,
-    pt_lats: list[float] | None = None,
-    pt_lons: list[float] | None = None,
-    bbox_pad: float = 1.0,
 ) -> xr.Dataset:
     """Return *ds* with pixels that have NaN/Inf lat or lon removed.
 
@@ -944,15 +1025,12 @@ def _drop_nan_geoloc(
     Stacking requires xarray ≥ 2026.2 (``NDPointIndex`` support for
     multiple coordinate variables sharing one dimension).
 
-    When *pt_lats* and *pt_lons* are provided (the query-point coordinates),
-    the stacked pixels are also filtered to the padded bounding box of those
-    points so that the k-d tree is not built over the entire swath/disk.
-    This bbox pre-filter is applied together with the NaN filter in a single
-    pass after stacking.
+    If all coordinates are finite the dataset is returned unchanged.
 
-    If all coordinates are finite the dataset is returned unchanged (fast path),
-    regardless of whether *pt_lats*/*pt_lons* are provided.  The bbox filter is
-    only applied during the stacking pass that is triggered by NaN/Inf values.
+    Call :func:`_slice_2d_to_points` (for 2-D swath data) or
+    :func:`_slice_grid_to_points` (for 1-D regular grids) *before* calling
+    this function to restrict the dataset to the bounding box of the query
+    points so that the k-d tree is not built over the entire swath.
     """
     lat_arr = ds.coords[lat_name] if lat_name in ds.coords else ds[lat_name]
     lon_arr = ds.coords[lon_name] if lon_name in ds.coords else ds[lon_name]
@@ -963,9 +1041,9 @@ def _drop_nan_geoloc(
     if np.all(np.isfinite(lat_vals)) and np.all(np.isfinite(lon_vals)):
         return ds  # Fast path — nothing to do.
 
-    # NaN/Inf values detected (or bbox filter requested) — stacking is required.
-    # NDPointIndex in xarray < 2026.2 cannot handle 2 coordinate variables on 1
-    # stacked dimension and will raise a confusing ValueError.  Check the version
+    # NaN/Inf values detected — stacking is required.  NDPointIndex in
+    # xarray < 2026.2 cannot handle 2 coordinate variables on 1 stacked
+    # dimension and will raise a confusing ValueError.  Check the version
     # now and exit with a clear message rather than letting xarray crash.
     import importlib.metadata
     from packaging.version import Version
@@ -988,22 +1066,9 @@ def _drop_nan_geoloc(
     lon_s = stacked.coords[lon_name] if lon_name in stacked.coords else stacked[lon_name]
     valid = np.isfinite(lat_s.values) & np.isfinite(lon_s.values)
 
-    # Apply bounding-box pre-filter when query points are provided so that
-    # we don't build the k-d tree over the entire swath/disk.
-    if pt_lats is not None and pt_lons is not None and np.any(valid):
-        min_lat = min(pt_lats) - bbox_pad
-        max_lat = max(pt_lats) + bbox_pad
-        min_lon = min(pt_lons) - bbox_pad
-        max_lon = max(pt_lons) + bbox_pad
-        bbox_mask = (
-            (lat_s.values >= min_lat) & (lat_s.values <= max_lat)
-            & (lon_s.values >= min_lon) & (lon_s.values <= max_lon)
-        )
-        valid = valid & bbox_mask
-
     if not np.any(valid):
-        # All pixels are bad (or outside bbox); return the stacked-but-unfiltered
-        # dataset so that the caller can propagate NaN results rather than crashing.
+        # All pixels are bad; return the stacked-but-unfiltered dataset so that
+        # the caller can propagate NaN results rather than crashing here.
         return stacked
 
     return stacked.isel({"__pc__": valid})
@@ -1211,6 +1276,15 @@ def _extract_xoak_batch(
     if lon_name in ds_work.coords and hasattr(ds_work.coords[lon_name].data, "compute"):
         ds_work[lon_name] = ds_work.coords[lon_name].compute()
 
+    # For 2-D irregular-grid (swath) coordinates, pre-filter to the bounding
+    # box of the query points before building the index.  This must happen
+    # before the meshgrid expansion below so that the check fires only for
+    # genuinely 2-D coords (not the synthetic meshgrid we create for 1-D data,
+    # which has already been sliced by _slice_grid_to_points at the call site).
+    _pt_lats = [float(r["lat"]) for r in rows]
+    _pt_lons = [float(r["lon"]) for r in rows]
+    ds_work = _slice_2d_to_points(ds_work, _pt_lats, _pt_lons, lat_name, lon_name)
+
     # NDPointIndex requires lat and lon to share the same dimensions.  For
     # regular grid data (1-D lat/lon with separate dimensions), broadcast both
     # coordinates to a common 2-D meshgrid so that the joint index can be built.
@@ -1223,12 +1297,7 @@ def _extract_xoak_batch(
         ds_work[lon_name] = xr.DataArray(lon_2d, dims=lat_dims)
 
     # Drop pixels where lat/lon are NaN or Inf (e.g. fill values outside swath).
-    # For 2-D irregular coordinates, also apply a bbox pre-filter so that the
-    # k-d tree is built only over the region of interest rather than the full
-    # swath or disk.
-    _pt_lats = [float(r["lat"]) for r in rows]
-    _pt_lons = [float(r["lon"]) for r in rows]
-    ds_work = _drop_nan_geoloc(ds_work, lat_name, lon_name, pt_lats=_pt_lats, pt_lons=_pt_lons)
+    ds_work = _drop_nan_geoloc(ds_work, lat_name, lon_name)
 
     # Build the NDPointIndex once for all query points.
     indexed_ds = ds_work.set_xindex(
@@ -1338,6 +1407,15 @@ def _extract_ndpoint_batch(
     if lon_name in ds_work.coords and hasattr(ds_work.coords[lon_name].data, "compute"):
         ds_work[lon_name] = ds_work.coords[lon_name].compute()
 
+    # For 2-D irregular-grid (swath) coordinates, pre-filter to the bounding
+    # box of the query points before building the index.  This must happen
+    # before the meshgrid expansion below so that the check fires only for
+    # genuinely 2-D coords (not the synthetic meshgrid we create for 1-D data,
+    # which has already been sliced by _slice_grid_to_points at the call site).
+    _pt_lats = [float(r["lat"]) for r in rows]
+    _pt_lons = [float(r["lon"]) for r in rows]
+    ds_work = _slice_2d_to_points(ds_work, _pt_lats, _pt_lons, lat_name, lon_name)
+
     # NDPointIndex requires lat and lon to share the same dimensions.  For
     # regular grid data (1-D lat/lon with separate dimensions), broadcast both
     # coordinates to a common 2-D meshgrid so that the joint index can be built.
@@ -1353,12 +1431,7 @@ def _extract_ndpoint_batch(
         ds_work[lon_name] = xr.DataArray(lon_2d, dims=lat_dims)
 
     # Drop pixels where lat/lon are NaN or Inf (e.g. fill values outside swath).
-    # For 2-D irregular coordinates, also apply a bbox pre-filter so that the
-    # k-d tree is built only over the region of interest rather than the full
-    # swath or disk.
-    _pt_lats = [float(r["lat"]) for r in rows]
-    _pt_lons = [float(r["lon"]) for r in rows]
-    ds_work = _drop_nan_geoloc(ds_work, lat_name, lon_name, pt_lats=_pt_lats, pt_lons=_pt_lons)
+    ds_work = _drop_nan_geoloc(ds_work, lat_name, lon_name)
 
     # Build the NDPointIndex once for all query points using the built-in
     # scipy adapter (ScipyKDTreeAdapter).  No tree_adapter_cls argument is

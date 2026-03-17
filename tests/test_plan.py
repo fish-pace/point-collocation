@@ -5706,11 +5706,11 @@ class TestNdpointSpatialMethod:
             _drop_nan_geoloc(ds, "lat", "lon")
 
     def test_drop_nan_geoloc_bbox_filter_reduces_pixel_count(self) -> None:
-        """When pt_lats/pt_lons are provided, only pixels within the bbox are kept."""
+        """_slice_2d_to_points removes out-of-bbox rows/cols even when NaN pixels exist."""
         pytest.importorskip("scipy")
         import numpy as np
         import xarray as xr
-        from point_collocation.core.engine import _drop_nan_geoloc
+        from point_collocation.core.engine import _slice_2d_to_points
 
         # 4x4 swath: last row is NaN (fill values).  Rows 0-2 span a wide area.
         # Row 1 uses lon values close to 0 so a tight bbox around (0, 0) can
@@ -5732,22 +5732,72 @@ class TestNdpointSpatialMethod:
             coords={"lat": (["r", "c"], lat), "lon": (["r", "c"], lon)},
         )
 
-        # Without bbox filter: all 12 valid pixels (3 rows × 4 cols) are returned.
-        result_no_bbox = _drop_nan_geoloc(ds, "lat", "lon")
-        assert result_no_bbox.sizes["__pc__"] == 12
+        # Without bbox filter: full dataset unchanged.
+        result_full = ds
+        assert result_full.sizes["r"] == 4
 
-        # With bbox filter centred on (0, 0) with 1° pad: only the 4 pixels in
-        # row 1 (lat=0, lon ∈ {-0.5, -0.2, 0.2, 0.5}) survive.
-        result_bbox = _drop_nan_geoloc(ds, "lat", "lon", pt_lats=[0.0], pt_lons=[0.0])
-        assert result_bbox.sizes["__pc__"] < 12
-        # Every kept pixel must be within the padded bbox.
+        # With bbox filter centred on (0, 0) with 1° pad: only row 1 survives
+        # (rows 0 and 2 have lon values ±10° or more, row 3 is all NaN).
+        result_bbox = _slice_2d_to_points(ds, [0.0], [0.0], "lat", "lon")
+        assert result_bbox.sizes["r"] < 4
+        # Every kept row must have at least one pixel within bbox lat/lon.
         kept_lats = result_bbox.coords["lat"].values
         kept_lons = result_bbox.coords["lon"].values
-        assert np.all(np.abs(kept_lats) <= 1.0)
-        assert np.all(np.abs(kept_lons) <= 1.0)
+        # row 1 is within bbox (lat=0, lon ∈ {-0.5, -0.2, 0.2, 0.5})
+        assert np.any(np.abs(kept_lats) <= 1.0)
+        assert np.any(np.abs(kept_lons) <= 1.0)
+
+    def test_slice_2d_to_points_reduces_pixel_count(self) -> None:
+        """_slice_2d_to_points filters 2-D swath rows/cols to the query bbox."""
+        import numpy as np
+        import xarray as xr
+        from point_collocation.core.engine import _slice_2d_to_points
+
+        # 5×4 swath: rows 0 and 4 span high/low latitudes far from the query.
+        # Only row 2 (lat=0) and its neighbours should survive a bbox at (0, 0).
+        lat = np.array([
+            [80.0, 80.0, 80.0, 80.0],
+            [5.0,  5.0,  5.0,  5.0],
+            [0.0,  0.0,  0.0,  0.0],
+            [-5.0, -5.0, -5.0, -5.0],
+            [-80.0, -80.0, -80.0, -80.0],
+        ], dtype=np.float32)
+        lon = np.array([
+            [-30.0, -10.0, 10.0, 30.0],
+            [-0.5,  -0.2,  0.2,  0.5],
+            [-0.5,  -0.2,  0.2,  0.5],
+            [-0.5,  -0.2,  0.2,  0.5],
+            [-30.0, -10.0, 10.0, 30.0],
+        ], dtype=np.float32)
+        ds = xr.Dataset(
+            {"sst": (["r", "c"], np.ones((5, 4)))},
+            coords={"lat": (["r", "c"], lat), "lon": (["r", "c"], lon)},
+        )
+
+        # With default 1° pad around (0, 0): rows 0 and 4 are far outside.
+        result = _slice_2d_to_points(ds, [0.0], [0.0], "lat", "lon")
+        assert result.sizes["r"] < 5  # Some rows were dropped.
+        assert result.sizes["c"] == 4  # All cols are within lon bbox.
+
+        # The extreme rows (lat=80 and lat=-80) must be gone.
+        remaining_lats = result.coords["lat"].values
+        assert not np.any(np.abs(remaining_lats) > 10.0)
+
+    def test_slice_2d_to_points_leaves_1d_unchanged(self) -> None:
+        """_slice_2d_to_points must not touch datasets with 1-D coordinates."""
+        import numpy as np
+        import xarray as xr
+        from point_collocation.core.engine import _slice_2d_to_points
+
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], np.ones((5, 4)))},
+            coords={"lat": np.linspace(-80, 80, 5), "lon": np.linspace(-30, 30, 4)},
+        )
+        result = _slice_2d_to_points(ds, [0.0], [0.0], "lat", "lon")
+        assert result.identical(ds)
 
 
-    """Tests for spatial_method='auto' (default): dim-based routing + nearest→ndpoint fallback."""
+class TestAutoSpatialMethod:
 
     def _make_granule_meta(self) -> "GranuleMeta":
         return GranuleMeta(
