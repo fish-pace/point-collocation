@@ -937,7 +937,10 @@ def _drop_nan_geoloc(
     reads those pixels it converts the fill value to NaN.  Passing NaN
     coordinates to scipy's or xoak's KD-tree raises a ``ValueError``.
     This helper stacks all spatial dimensions, removes the bad pixels,
-    and returns a dataset whose 1-D layout is safe for ``set_xindex()``.
+    and returns a dataset with a 1-D ``__pc__`` layout.  Callers that
+    detect a 1-D result should use :func:`_extract_1d_kd_scipy` directly
+    rather than ``set_xindex`` because older xarray versions require the
+    number of coordinate variables to equal the number of dimensions.
 
     If all coordinates are finite the dataset is returned unchanged.
     """
@@ -1119,6 +1122,69 @@ def _extract_xoak(
             row[var] = float("nan")
 
 
+def _extract_1d_kd_scipy(
+    ds: xr.Dataset,
+    rows: list[dict],
+    variables: list[str],
+    lon_name: str,
+    lat_name: str,
+    time_dim: str | None = None,
+) -> None:
+    """Nearest-neighbour extraction using scipy.spatial.KDTree on 1-D point clouds.
+
+    Called when :func:`_drop_nan_geoloc` has stacked lat/lon to a single
+    dimension, making ``NDPointIndex.set_xindex`` unusable on older xarray
+    versions (they require ``len(variables) == len(var0.dims)``, but after
+    stacking we have 2 coordinate variables over 1 dimension).
+
+    Modifies each dict in *rows* in-place.
+    """
+    from scipy.spatial import KDTree
+
+    lat_arr = ds.coords[lat_name] if lat_name in ds.coords else ds[lat_name]
+    lon_arr = ds.coords[lon_name] if lon_name in ds.coords else ds[lon_name]
+    pc_dim = lat_arr.dims[0]
+
+    lat_vals = np.asarray(lat_arr)
+    lon_vals = np.asarray(lon_arr)
+
+    lats = [row["lat"] for row in rows]
+    lons = [row["lon"] for row in rows]
+
+    try:
+        tree = KDTree(np.column_stack([lat_vals, lon_vals]))
+        _, indices = tree.query(np.column_stack([lats, lons]))
+
+        for i, row in enumerate(rows):
+            row["granule_lat"] = float(lat_vals[indices[i]])
+            row["granule_lon"] = float(lon_vals[indices[i]])
+
+        for var in variables:
+            try:
+                for i, row in enumerate(rows):
+                    point_data = ds[var].isel({pc_dim: int(indices[i])}).squeeze()
+                    if time_dim is not None:
+                        point_data = _select_time(point_data, time_dim, row.get("time"))
+                    if point_data.ndim == 0:
+                        row[var] = float(point_data)
+                    else:
+                        # Additional dimensions (e.g. wavelength) — expand
+                        # into coord-keyed columns (Rrs_346, Rrs_348, …).
+                        row[var] = float("nan")  # placeholder; removed later
+                        for coord_val, val in point_data.to_series().items():
+                            row[f"{var}_{int(coord_val)}"] = float(val)
+            except Exception:
+                for r in rows:
+                    r[var] = float("nan")
+    except Exception:
+        for row in rows:
+            row["granule_lat"] = float("nan")
+            row["granule_lon"] = float("nan")
+        for var in variables:
+            for r in rows:
+                r[var] = float("nan")
+
+
 def _extract_xoak_batch(
     ds: xr.Dataset,
     rows: list[dict],
@@ -1180,6 +1246,16 @@ def _extract_xoak_batch(
 
     # Drop pixels where lat/lon are NaN or Inf (e.g. fill values outside swath).
     ds_work = _drop_nan_geoloc(ds_work, lat_name, lon_name)
+
+    # After _drop_nan_geoloc, lat/lon may have been stacked to 1-D.  Older
+    # xarray versions raise "the number of variables N doesn't match the number
+    # of dimensions M" in NDPointIndex.from_variables when given 2 coordinate
+    # variables that each span only 1 dimension.  Fall back to a direct scipy
+    # KDTree in that case so the NaN-removal still works on all xarray versions.
+    lat_arr_post = ds_work.coords[lat_name] if lat_name in ds_work.coords else ds_work[lat_name]
+    if lat_arr_post.ndim == 1:
+        _extract_1d_kd_scipy(ds_work, rows, variables, lon_name, lat_name, time_dim)
+        return
 
     # Build the NDPointIndex once for all query points.
     indexed_ds = ds_work.set_xindex(
@@ -1305,6 +1381,16 @@ def _extract_ndpoint_batch(
 
     # Drop pixels where lat/lon are NaN or Inf (e.g. fill values outside swath).
     ds_work = _drop_nan_geoloc(ds_work, lat_name, lon_name)
+
+    # After _drop_nan_geoloc, lat/lon may have been stacked to 1-D.  Older
+    # xarray versions raise "the number of variables N doesn't match the number
+    # of dimensions M" in NDPointIndex.from_variables when given 2 coordinate
+    # variables that each span only 1 dimension.  Fall back to a direct scipy
+    # KDTree in that case so the NaN-removal still works on all xarray versions.
+    lat_arr_post = ds_work.coords[lat_name] if lat_name in ds_work.coords else ds_work[lat_name]
+    if lat_arr_post.ndim == 1:
+        _extract_1d_kd_scipy(ds_work, rows, variables, lon_name, lat_name, time_dim)
+        return
 
     # Build the NDPointIndex once for all query points using the built-in
     # scipy adapter (ScipyKDTreeAdapter).  No tree_adapter_cls argument is
