@@ -65,6 +65,10 @@ plan = pc.plan(
 )
 
 # Inspect available variables before running the full matchup.
+if not plan.results:
+    print("No granules found — skipping matchup (check Earthdata credentials/search params).")
+    sys.exit(0)
+
 ds = plan.open_dataset(0)
 ds.close()
 

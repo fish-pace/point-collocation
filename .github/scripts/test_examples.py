@@ -19,8 +19,11 @@ always succeeds and the report artifact is always uploaded.
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,13 +33,63 @@ NOTEBOOK_TIMEOUT = 600  # seconds per notebook
 SCRIPT_TIMEOUT = 300  # seconds per script
 MAX_DETAIL_CHARS = 10_000  # truncate very long error output in the report
 
+# Pattern for bare ``pip install`` lines in notebook cells.
+# These are install-hint cells meant for interactive use and should be skipped
+# during automated execution.  We match lines that start with optional
+# whitespace followed by ``pip install``.  Lines prefixed with ``!`` or ``%``
+# (Jupyter magic/shell commands) are automatically excluded because the pattern
+# requires ``pip`` to appear immediately after the optional leading whitespace.
+# Lines prefixed with ``#`` are excluded because the ``#`` character is not in
+# ``[ \t]*``.  Occurrences inside multi-line strings are theoretically possible
+# but vanishingly rare in documentation notebooks and are acceptable to comment
+# out in the temporary execution copy.
+_BARE_PIP_RE = re.compile(r"^(?P<indent>[ \t]*)pip[ \t]+install\b", re.MULTILINE)
+
+
+def _notebook_with_pip_install_commented(nb_path: Path) -> Path | None:
+    """Return a temp notebook path with bare ``pip install`` lines commented out.
+
+    Returns *None* when no such lines are found (caller should use the original
+    path unchanged).  The caller is responsible for deleting the temp file.
+    """
+    data = json.loads(nb_path.read_text(encoding="utf-8"))
+    changed = False
+
+    for cell in data.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell["source"]
+        text = "".join(src) if isinstance(src, list) else src
+        new_text = _BARE_PIP_RE.sub(
+            lambda m: m.group("indent") + "# pip install", text
+        )
+        if new_text != text:
+            changed = True
+            cell["source"] = (
+                new_text.splitlines(keepends=True) if isinstance(src, list) else new_text
+            )
+
+    if not changed:
+        return None
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".ipynb", prefix=f"_pctest_{nb_path.stem}_")
+    with open(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    return Path(tmp_path)
+
 
 def run_notebook(nb_path: Path) -> tuple[bool, str]:
     """Execute *nb_path* with ``jupyter nbconvert --execute``.
 
     Returns ``(passed, detail)`` where *detail* is non-empty only on failure.
     The notebook is executed in-place (the output cells are written back).
+
+    Before execution, bare ``pip install`` lines in code cells are commented
+    out in a temp copy so that install-hint cells (e.g. ``pip install
+    point-collocation``) do not abort the run with a SyntaxError.
     """
+    tmp_path = _notebook_with_pip_install_commented(nb_path)
+    exec_path = tmp_path if tmp_path is not None else nb_path
     try:
         proc = subprocess.run(
             [
@@ -49,7 +102,7 @@ def run_notebook(nb_path: Path) -> tuple[bool, str]:
                 "--execute",
                 "--inplace",
                 f"--ExecutePreprocessor.timeout={NOTEBOOK_TIMEOUT}",
-                str(nb_path),
+                str(exec_path),
             ],
             capture_output=True,
             text=True,
@@ -57,6 +110,9 @@ def run_notebook(nb_path: Path) -> tuple[bool, str]:
         )
     except subprocess.TimeoutExpired:
         return False, f"Timed out after {NOTEBOOK_TIMEOUT + 60} seconds."
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
     if proc.returncode == 0:
         return True, ""
