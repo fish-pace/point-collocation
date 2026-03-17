@@ -491,6 +491,31 @@ def _apply_coords(ds: xr.Dataset, spec: dict) -> tuple[xr.Dataset, str, str]:
     )
 
 
+def _geoloc_description(ds: "xr.Dataset", lon_name: str, lat_name: str, spec: dict) -> str:
+    """Return a human-readable geolocation line for printing in open_dataset.
+
+    The description notes *how* the pair was found:
+
+    * ``"auto detected with cf_xarray"`` — CF-convention attributes used.
+    * ``"auto detected by name"`` — name-based fallback used.
+    * ``"specified"`` — caller provided an explicit ``coords`` dict.
+    """
+    coords = spec.get("coords", "auto")
+
+    lon_var = ds.coords[lon_name] if lon_name in ds.coords else ds[lon_name]
+    lat_var = ds.coords[lat_name] if lat_name in ds.coords else ds[lat_name]
+    dims_str = f"lon dims={tuple(lon_var.dims)}, lat dims={tuple(lat_var.dims)}"
+    pair_str = f"({lon_name!r}, {lat_name!r})"
+
+    if isinstance(coords, dict):
+        return f"Geolocation specified: {pair_str} — {dims_str}"
+
+    # "auto" or list — check whether cf_xarray drove the detection.
+    cf_lons = _cf_geoloc_names(ds, "longitude")
+    method = "auto detected with cf_xarray" if lon_name in cf_lons else "auto detected by name"
+    return f"Geolocation {method}: {pair_str} — {dims_str}"
+
+
 # ---------------------------------------------------------------------------
 # Dataset-based group merge helpers
 # ---------------------------------------------------------------------------

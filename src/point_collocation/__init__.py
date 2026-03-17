@@ -33,7 +33,7 @@ Quick start
     )
 
     # Inspect what variables are available before running the full matchup
-    plan.show_variables()
+    ds = plan.open_dataset(plan[0])   # prints open_method spec and detected geolocation
 
     # Open a single granule interactively
     ds = plan.open_dataset(plan[0])

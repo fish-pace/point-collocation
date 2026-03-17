@@ -20,7 +20,7 @@ Typical workflow
         time_buffer="0h",
     )
     plan.summary()
-    plan.show_variables()
+    plan.open_dataset(0)   # inspect first granule; prints open_method and geolocation
 
     result = pc.matchup(plan, variables=["Rrs"])   # executes the plan; one row per point×granule
 """
@@ -249,6 +249,7 @@ class Plan:
         from point_collocation.core._open_method import (
             _apply_coords,
             _build_effective_open_kwargs,
+            _geoloc_description,
             _merge_datatree_with_spec,
             _normalize_open_method,
             _open_and_merge_dataset_groups,
@@ -308,7 +309,9 @@ class Plan:
                 if hasattr(dt, "close"):
                     dt.close()
             try:
-                ds, _, _ = _apply_coords(ds, spec)
+                ds, lon_n, lat_n = _apply_coords(ds, spec)
+                if not silent:
+                    print(_geoloc_description(ds, lon_n, lat_n, spec))
             except ValueError:
                 pass  # coords not found; return merged dataset as-is
             return ds
@@ -322,7 +325,9 @@ class Plan:
                 with _suppress_dask_progress():
                     ds = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
             try:
-                ds, _, _ = _apply_coords(ds, spec)
+                ds, lon_n, lat_n = _apply_coords(ds, spec)
+                if not silent:
+                    print(_geoloc_description(ds, lon_n, lat_n, spec))
             except ValueError:
                 pass  # coords not found; return dataset as-is
             return ds
@@ -436,146 +441,8 @@ class Plan:
         )
 
     # ------------------------------------------------------------------
-    # Variable inspection
+    # Variable inspection (removed; use open_dataset(0) instead)
     # ------------------------------------------------------------------
-
-    def show_variables(
-        self,
-        open_method: "str | dict | None" = None,
-    ) -> None:
-        """Print the first granule's dimensions, and variables.
-
-        Prints a concise summary with ``Dimensions``/``Variables``/``Geolocation``.
-
-        To obtain the full xarray representation programmatically use
-        ``plan.open_dataset(0)`` instead or  ``plan.open_dataset(0, open_method="datatree")`` is granule is grouped netcdf.
-
-        Parameters
-        ----------
-        open_method:
-            How to open the granule.  Accepts the same string presets or
-            dict spec as :func:`~point_collocation.matchup`.  Defaults to
-            ``"auto"``.  Pass open-function kwargs via the ``"open_kwargs"``
-            key of a dict spec, e.g.
-            ``open_method={"open_kwargs": {"engine": "netcdf4"}}``.
-
-        Raises
-        ------
-        ValueError
-            If the plan contains no granules.
-        """
-        from point_collocation.core._open_method import (
-            _apply_coords,
-            _build_effective_open_kwargs,
-            _merge_datatree_with_spec,
-            _normalize_open_method,
-            _open_and_merge_dataset_groups,
-            _open_datatree_fn,
-            _resolve_auto_spec,
-        )
-
-        if not self.results:
-            raise ValueError("No granules in plan — cannot show variables.")
-
-        effective_open_method = "auto" if open_method is None else open_method
-        spec = _normalize_open_method(effective_open_method)
-        xarray_open = spec.get("xarray_open", "dataset")
-
-        try:
-            import earthaccess  # type: ignore[import-untyped]
-        except ImportError as exc:
-            raise ImportError(
-                "The 'earthaccess' package is required. "
-                "Install it with: pip install earthaccess"
-            ) from exc
-
-        import xarray as xr
-
-        file_objs = earthaccess.open([self.results[0]], pqdm_kwargs={"disable": True})
-        if len(file_objs) != 1:
-            raise RuntimeError(
-                f"Expected 1 file object from earthaccess.open, got {len(file_objs)}."
-            )
-        file_obj = file_objs[0]
-
-        effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
-
-        # For "auto" mode, probe the file first so the printed spec shows the
-        # actual resolved mode (e.g. "dataset"), not "auto".
-        # Any ValueError from _resolve_auto_spec is propagated to the caller.
-        if xarray_open == "auto":
-            spec = _resolve_auto_spec(file_obj, spec)
-            xarray_open = spec["xarray_open"]
-            effective_kwargs = _build_effective_open_kwargs(spec.get("open_kwargs", {}))
-
-        # Print the spec summary.  Ensure "merge" is always present so the
-        # printed spec is unambiguous (it may be absent for the "auto" preset).
-        display_spec = {**spec, "open_kwargs": effective_kwargs}
-        display_spec.setdefault("merge", None)
-        print(f"open_method: {display_spec!r}")
-
-        # ---------------------------------------------------------------
-        # Use xarray to inspect the file (same lazy path as open_dataset).
-        # ---------------------------------------------------------------
-        dt = None
-        merge = spec.get("merge")
-        if xarray_open == "datatree":
-            dt = _open_datatree_fn(file_obj, effective_kwargs)
-            if merge is None:
-                # Raw DataTree mode — respect the merge=None setting.
-                # List the available groups so the user knows what to pass.
-                groups = [
-                    node.path
-                    for node in dt.subtree  # type: ignore[union-attr]
-                    if node.path != "/"
-                ]
-                print(
-                    "\nGroups available (merge=None):\n  "
-                    + "\n  ".join(groups or ["(none)"])
-                    + "\n\nSet merge to a list of group paths to inspect variables, e.g.\n"
-                    "  open_method={'xarray_open': 'datatree', "
-                    "'merge': ['" + (groups[0] if groups else "group") + "', ...]}"
-                )
-                return
-            ds_flat = _merge_datatree_with_spec(dt, spec)
-        elif xarray_open == "dataset" and merge is not None:
-            ds_flat = _open_and_merge_dataset_groups(file_obj, spec, effective_kwargs)
-        else:
-            ds_flat = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
-
-        print(f"\nDimensions: {dict(ds_flat.sizes)}")
-        print(f"\nVariables: {list(ds_flat.data_vars)}")
-
-        if not ds_flat.data_vars:
-            print(
-                "\nNo data variables found with the current open_method settings. "
-                "If this is a grouped file, set merge to a list of group paths, e.g.\n"
-                "  open_method={'xarray_open': 'datatree', 'merge': ['group1', 'group2']}"
-            )
-            return
-
-        # Geolocation detection results.
-        try:
-            ds_flat, lon_n, lat_n = _apply_coords(ds_flat, spec)
-            lon_var = ds_flat.coords[lon_n] if lon_n in ds_flat.coords else ds_flat[lon_n]
-            lat_var = ds_flat.coords[lat_n] if lat_n in ds_flat.coords else ds_flat[lat_n]
-            print(
-                f"\nGeolocation: ({lon_n!r}, {lat_n!r}) — "
-                f"lon dims={tuple(lon_var.dims)}, lat dims={tuple(lat_var.dims)}"
-            )
-        except ValueError as exc:
-            msg = str(exc)
-            if "no geolocation variables found" in msg:
-                coords_val = display_spec.get("coords", "auto")
-                set_coords_val = display_spec.get("set_coords", True)
-                print(
-                    f"\nGeolocation: NONE detected with "
-                    f"'coords': {coords_val!r}, 'set_coords': {set_coords_val!r}. "
-                    "Try open_method='datatree-merge' or specify "
-                    "open_method={'coords': {'lat': '...', 'lon': '...'}}."
-                )
-            else:
-                print(f"\nGeolocation: {msg}")
 
     # ------------------------------------------------------------------
     # Summary
