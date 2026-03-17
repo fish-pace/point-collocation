@@ -5,11 +5,13 @@ channels:
 dependencies:
   - python>=3.10
   # core
-  - xarray>=2023.1.0
+  - xarray>=2025.07.1
   - pandas>=2.0.0
   - numpy>=1.24.0
-  # optional extras
-  - earthaccess>=0.9.0
+  - earthaccess>=0.15.0
+  - cf-xarray>=0.7.0
+  - scipy>=1.11
+  # optional
   - xoak>=0.2.0
   - scikit-learn>=1.0.0
   # testing
