@@ -14,6 +14,9 @@ dependencies:
   # optional
   - xoak>=0.2.0
   - scikit-learn>=1.0.0
+  # examples
+  - matplotlib
+  - cartopy
   # testing
   - pytest>=7.0
   - pytest-cov
