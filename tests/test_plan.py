@@ -6274,7 +6274,7 @@ class TestAutoSpatialMethod:
             make_plan(), open_method="dataset", variables=["sst"],
             spatial_method="auto", open_dataset_kwargs={"engine": "netcdf4"},
         )
-        mock_ea.open.return_value = [nc_path]  # reset
+        mock_ea.open.return_value = [nc_path]  # ensure a fresh list for the second call
         result_kdtree = pc.matchup(
             make_plan(), open_method="dataset", variables=["sst"],
             spatial_method="kdtree", open_dataset_kwargs={"engine": "netcdf4"},

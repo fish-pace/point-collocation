@@ -606,9 +606,7 @@ def _execute_plan(
             plan.results[plan.granules[g_idx].result_index]
             for g_idx, _ in batch_items
         ]
-        opened_batch: list[object] = list(earthaccess.open(
-            batch_results, pqdm_kwargs={"disable": True}
-        ))
+        opened_batch: list[object] = list(earthaccess.open(batch_results, pqdm_kwargs={"disable": True}))
 
         batch_matched_points = 0
         batch_rows: list[dict] = []
