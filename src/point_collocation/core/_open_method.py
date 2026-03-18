@@ -511,6 +511,10 @@ def _geoloc_description(
     lat_name: str,
     spec: dict,
     time_dim: "str | None" = None,
+    *,
+    pts_y_col: "str | None" = None,
+    pts_x_col: "str | None" = None,
+    pts_time_col: "str | None" = None,
 ) -> str:
     """Return a human-readable geolocation line for printing in open_dataset.
 
@@ -524,12 +528,22 @@ def _geoloc_description(
     of time steps are appended to the description.  When *time_dim* is
     ``None`` (dataset has no time dimension) nothing is appended.
 
+    When *pts_y_col*, *pts_x_col*, or *pts_time_col* are provided, a
+    summary of the resolved points column names is appended so users can
+    verify which columns were used for matching.
+
     Parameters
     ----------
     time_dim:
         Name of the time dimension detected by
         :func:`~point_collocation.core.engine._find_time_dim`, or ``None``
         if the dataset has no time dimension.
+    pts_y_col:
+        Resolved latitude column name from the points DataFrame (for display).
+    pts_x_col:
+        Resolved longitude column name from the points DataFrame (for display).
+    pts_time_col:
+        Resolved time column name from the points DataFrame (for display).
     """
     coords = spec.get("coords", "auto")
 
@@ -549,6 +563,17 @@ def _geoloc_description(
     if time_dim is not None:
         n_times = ds.sizes[time_dim]
         base += f"; time dim={time_dim!r} ({n_times} step(s))"
+
+    # Append resolved points column names for transparency.
+    pts_parts = []
+    if pts_y_col is not None:
+        pts_parts.append(f"y={pts_y_col!r}")
+    if pts_x_col is not None:
+        pts_parts.append(f"x={pts_x_col!r}")
+    if pts_time_col is not None:
+        pts_parts.append(f"time={pts_time_col!r}")
+    if pts_parts:
+        base += f"\nPoints columns used: {', '.join(pts_parts)}"
 
     return base
 

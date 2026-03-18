@@ -2084,6 +2084,7 @@ class TestMatchupWithPlan:
         )
 
         # batch_size=1 → 3 lines of output for 3 granules
+        # (plus one "Points columns" header line → filter it out for the count check)
         pc.matchup(
             p,
             open_method="dataset",
@@ -2093,7 +2094,7 @@ class TestMatchupWithPlan:
             spatial_method="nearest",
         )
         captured = capsys.readouterr()
-        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+        lines = [ln for ln in captured.out.splitlines() if ln.strip() and "granules" in ln]
         assert len(lines) == 3
         # Each line must follow the documented format
         for line in lines:
@@ -2636,10 +2637,11 @@ class TestNewOutputColumns:
 
         # With silent=False and default batch_size, only one progress line should appear
         # (all 3 granules processed in a single batch).
+        # (A "Points columns" header line is also printed; filter it out.)
         pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"},
                    silent=False, spatial_method="nearest")
         captured = capsys.readouterr()
-        lines = [ln for ln in captured.out.strip().splitlines() if ln.strip()]
+        lines = [ln for ln in captured.out.strip().splitlines() if ln.strip() and "granules" in ln]
         assert len(lines) == 1, (
             f"Expected 1 progress line (all granules in one batch), got {len(lines)}: {lines}"
         )
@@ -3044,7 +3046,7 @@ class TestGranuleRange:
             spatial_method="nearest",
         )
         captured = capsys.readouterr()
-        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+        lines = [ln for ln in captured.out.splitlines() if ln.strip() and "granules" in ln]
         # Two batches of 1 granule each → 2 progress lines
         assert len(lines) == 2
         # Lines must use absolute numbers (2, 3) and report against the full plan total (3)
