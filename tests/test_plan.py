@@ -2285,7 +2285,7 @@ class TestMatchupWithPlan:
         pc.matchup(
             plan,
             open_method="datatree-merge",
-            spatial_method="xoak",
+            spatial_method="xoak-kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
             silent=True,
             batch_size=1000,  # all 3 granules in one batch
@@ -4783,7 +4783,7 @@ class TestSpatialCompatCheck:
         _check_spatial_compat(ds_2d, "lon", "lat", "auto")
         _check_spatial_compat(ds_1d, "lon", "lat", "auto")
 
-    def test_xoak_any_dims_ok(self) -> None:
+    def test_xoak_kdtree_any_dims_ok(self) -> None:
         from point_collocation.core.engine import _check_spatial_compat
 
         ds_2d = xr.Dataset(
@@ -4794,17 +4794,17 @@ class TestSpatialCompatCheck:
         )
         ds_1d = xr.Dataset(coords={"lon": [0.0], "lat": [0.0]})
         # Should not raise for either dimensionality
-        _check_spatial_compat(ds_2d, "lon", "lat", "xoak")
-        _check_spatial_compat(ds_1d, "lon", "lat", "xoak")
+        _check_spatial_compat(ds_2d, "lon", "lat", "xoak-kdtree")
+        _check_spatial_compat(ds_1d, "lon", "lat", "xoak-kdtree")
 
 
 class TestMissingXoak:
-    """Test that missing xoak raises a clear ImportError."""
+    """Test that missing xoak raises a clear ImportError for spatial_method="xoak-kdtree"."""
 
-    def test_xoak_import_error_raised_early(
+    def test_xoak_kdtree_import_error_raised_early(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """matchup() raises ImportError for xoak before opening any granule."""
+        """matchup() raises ImportError for xoak-kdtree before opening any granule."""
         import sys
 
         # Block the xoak.tree_adapters submodule import by removing it from
@@ -4828,8 +4828,8 @@ class TestMissingXoak:
             time_buffer=pd.Timedelta(0),
         )
 
-        with pytest.raises(ImportError, match="xoak"):
-            pc.matchup(p, spatial_method="xoak")
+        with pytest.raises(ImportError, match="xoak-kdtree"):
+            pc.matchup(p, spatial_method="xoak-kdtree")
 
 
 class TestMissingVariableErrorMessage:
@@ -4877,12 +4877,12 @@ class TestMissingVariableErrorMessage:
 
 
 class TestXoakSpatialMethod:
-    """Tests for spatial_method='xoak' with both open_method='datatree-merge' and open_method='dataset'."""
+    """Tests for spatial_method='xoak-kdtree' with both open_method='datatree-merge' and open_method='dataset'."""
 
     def test_swath_matchup_returns_nearest_value(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Swath matchup using xoak returns the nearest pixel value."""
+        """Swath matchup using xoak-kdtree returns the nearest pixel value."""
         xoak = pytest.importorskip("xoak")  # skip if xoak not installed
         _ = xoak  # noqa: F841
 
@@ -4925,7 +4925,7 @@ class TestXoakSpatialMethod:
             p,
             open_method="datatree-merge",
             variables=["sst"],
-            spatial_method="xoak",
+            spatial_method="xoak-kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -4972,10 +4972,10 @@ class TestXoakSpatialMethod:
                 open_dataset_kwargs={"engine": "netcdf4"},
             )
 
-    def test_swath_matchup_3d_variable_expands_with_xoak(
+    def test_swath_matchup_3d_variable_expands_with_xoak_kdtree(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Swath matchup with xoak expands 3-D variables (e.g. Rrs) into per-wavelength columns."""
+        """Swath matchup with xoak-kdtree expands 3-D variables (e.g. Rrs) into per-wavelength columns."""
         pytest.importorskip("xoak")  # skip if xoak not installed
 
         wavelengths = [346, 348, 351]
@@ -5017,7 +5017,7 @@ class TestXoakSpatialMethod:
             p,
             open_method="datatree-merge",
             variables=["Rrs"],
-            spatial_method="xoak",
+            spatial_method="xoak-kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -5026,10 +5026,10 @@ class TestXoakSpatialMethod:
             assert f"Rrs_{wl}" in result.columns, f"Rrs_{wl} column missing"
         assert len(result) == 1
 
-    def test_grid_matchup_with_xoak_returns_nearest_value(
+    def test_grid_matchup_with_xoak_kdtree_returns_nearest_value(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """open_method='dataset' + spatial_method='xoak' returns the nearest grid value."""
+        """open_method='dataset' + spatial_method='xoak-kdtree' returns the nearest grid value."""
         pytest.importorskip("xoak")  # skip if xoak not installed
 
         lats = [-90.0, 0.0, 90.0]
@@ -5068,7 +5068,7 @@ class TestXoakSpatialMethod:
             p,
             open_method="dataset",
             variables=["sst"],
-            spatial_method="xoak",
+            spatial_method="xoak-kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -5076,10 +5076,10 @@ class TestXoakSpatialMethod:
         assert len(result) == 1
         assert not math.isnan(result.loc[0, "sst"])
 
-    def test_grid_matchup_xoak_global_granule_returns_nearest_value(
+    def test_grid_matchup_xoak_kdtree_global_granule_returns_nearest_value(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """open_method='dataset' + xoak on a global granule slices correctly and returns a value."""
+        """open_method='dataset' + xoak-kdtree on a global granule slices correctly and returns a value."""
         pytest.importorskip("xoak")  # skip if xoak not installed
 
         # Large global grid (181 lats × 361 lons) with the query point near centre.
@@ -5120,7 +5120,7 @@ class TestXoakSpatialMethod:
             p,
             open_method="dataset",
             variables=["sst"],
-            spatial_method="xoak",
+            spatial_method="xoak-kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -5128,7 +5128,7 @@ class TestXoakSpatialMethod:
         assert len(result) == 1
         assert not math.isnan(result.loc[0, "sst"])
 
-    def test_swath_matchup_multiple_points_same_granule_with_xoak(
+    def test_swath_matchup_multiple_points_same_granule_with_xoak_kdtree(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Multiple query points mapped to the same granule are processed via a single k-d tree."""
@@ -5175,7 +5175,7 @@ class TestXoakSpatialMethod:
             p,
             open_method="datatree-merge",
             variables=["sst"],
-            spatial_method="xoak",
+            spatial_method="xoak-kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
         assert "sst" in result.columns
@@ -5310,7 +5310,7 @@ class TestXoakSpatialMethod:
 
         Regression test for DSCOVR EPIC HE5 data where fill values (~-1.27e30)
         outside the valid Earth disk are converted to NaN by xarray.  Without
-        the fix, the xoak k-d tree raises ``ValueError`` when building the index
+        the fix, the xoak-kdtree k-d tree raises ``ValueError`` when building the index
         with NaN coordinates.  The k-d tree must skip those pixels.
         """
         pytest.importorskip("xoak")
@@ -5369,7 +5369,7 @@ class TestXoakSpatialMethod:
             p,
             open_method="datatree-merge",
             variables=["sst"],
-            spatial_method="xoak",
+            spatial_method="xoak-kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -5381,12 +5381,12 @@ class TestXoakSpatialMethod:
 
 
 class TestMissingNdpoint:
-    """Test that missing scipy raises a clear ImportError for spatial_method='ndpoint'."""
+    """Test that missing scipy raises a clear ImportError for spatial_method='kdtree'."""
 
-    def test_ndpoint_import_error_raised_early(
+    def test_kdtree_import_error_raised_early(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """matchup() raises ImportError for ndpoint before opening any granule."""
+        """matchup() raises ImportError for kdtree before opening any granule."""
         import sys
 
         # Block the scipy.spatial submodule import.
@@ -5409,16 +5409,207 @@ class TestMissingNdpoint:
         )
 
         with pytest.raises(ImportError, match="scipy"):
-            pc.matchup(p, spatial_method="ndpoint")
+            pc.matchup(p, spatial_method="kdtree")
 
 
-class TestNdpointSpatialMethod:
-    """Tests for spatial_method='ndpoint' (xarray built-in NDPointIndex with scipy)."""
+class TestMissingHaversine:
+    """Test that missing xoak raises a clear ImportError for spatial_method='xoak-haversine'."""
+
+    def test_haversine_import_error_raised_early(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """matchup() raises ImportError for xoak-haversine before opening any granule."""
+        import sys
+
+        # Block the xoak.tree_adapters submodule import.
+        for key in list(sys.modules.keys()):
+            if key == "xoak" or key.startswith("xoak."):
+                monkeypatch.delitem(sys.modules, key)
+        monkeypatch.setitem(sys.modules, "xoak", None)  # type: ignore[assignment]
+        monkeypatch.setitem(sys.modules, "xoak.tree_adapters", None)  # type: ignore[assignment]
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        with pytest.raises(ImportError, match="xoak-haversine"):
+            pc.matchup(p, spatial_method="xoak-haversine")
+
+
+class TestHaversineSpatialMethod:
+    """Tests for spatial_method='xoak-haversine' (xoak SklearnGeoBallTreeAdapter)."""
 
     def test_swath_matchup_returns_nearest_value(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Swath matchup using ndpoint returns the nearest pixel value."""
+        """Swath matchup using xoak-haversine returns the nearest pixel value."""
+        pytest.importorskip("xoak")  # skip if xoak not installed
+
+        nc_path = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=42)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        # Use the first lat/lon value from the swath as the query point.
+        lat_val = float(ds_swath["lat"].values[0, 0])
+        lon_val = float(ds_swath["lon"].values[0, 0])
+
+        pts = pd.DataFrame(
+            {
+                "lat": [lat_val],
+                "lon": [lon_val],
+                "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            }
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/swath.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            open_method="datatree-merge",
+            variables=["sst"],
+            spatial_method="xoak-haversine",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert "sst" in result.columns
+        assert len(result) == 1
+        assert not math.isnan(result.loc[0, "sst"])
+
+    def test_haversine_returns_same_value_as_xoak_for_normal_latitudes(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """xoak-haversine and xoak-kdtree return the same nearest value for points at normal latitudes."""
+        pytest.importorskip("xoak")  # skip if xoak not installed
+
+        nc_path = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=99)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+
+        def make_plan() -> "Plan":
+            mock_ea = MagicMock()
+            mock_ea.open.return_value = [nc_path]
+            monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+            lat_val = float(ds_swath["lat"].values[1, 2])
+            lon_val = float(ds_swath["lon"].values[1, 2])
+            pts = pd.DataFrame(
+                {
+                    "lat": [lat_val],
+                    "lon": [lon_val],
+                    "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+                }
+            )
+            gm = GranuleMeta(
+                granule_id="https://example.com/swath.nc",
+                begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+                end=pd.Timestamp("2023-06-01T23:59:59Z"),
+                bbox=(-180.0, -90.0, 180.0, 90.0),
+                result_index=0,
+            )
+            return Plan(
+                points=pts,
+                results=[object()],
+                granules=[gm],
+                point_granule_map={0: [0]},
+                source_kwargs={"short_name": "TEST"},
+                time_buffer=pd.Timedelta(0),
+            )
+
+        result_xoak_kdtree = pc.matchup(
+            make_plan(),
+            open_method="datatree-merge",
+            variables=["sst"],
+            spatial_method="xoak-kdtree",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        result_haversine = pc.matchup(
+            make_plan(),
+            open_method="datatree-merge",
+            variables=["sst"],
+            spatial_method="xoak-haversine",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert result_xoak_kdtree.loc[0, "sst"] == pytest.approx(result_haversine.loc[0, "sst"])
+
+    def test_grid_matchup_returns_nearest_value(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_method='dataset' + spatial_method='xoak-haversine' returns the nearest grid value."""
+        pytest.importorskip("xoak")  # skip if xoak not installed
+
+        lats = [-1.0, 0.0, 1.0]
+        lons = [-1.0, 0.0, 1.0]
+        nc_path = str(tmp_path / "grid.nc")
+        _make_l3_dataset(lats, lons, seed=7).to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        gm = GranuleMeta(
+            granule_id="https://example.com/grid.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-1.0, -1.0, 1.0, 1.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            variables=["sst"],
+            spatial_method="xoak-haversine",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+
+        assert "sst" in result.columns
+        assert len(result) == 1
+        assert not math.isnan(result.loc[0, "sst"])
+
+
+class TestNdpointSpatialMethod:
+    """Tests for spatial_method='kdtree' (xarray built-in NDPointIndex with scipy)."""
+
+    def test_swath_matchup_returns_nearest_value(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Swath matchup using kdtree returns the nearest pixel value."""
         pytest.importorskip("scipy")
 
         nc_path = str(tmp_path / "swath.nc")
@@ -5459,7 +5650,7 @@ class TestNdpointSpatialMethod:
             p,
             open_method="datatree-merge",
             variables=["sst"],
-            spatial_method="ndpoint",
+            spatial_method="kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -5470,7 +5661,7 @@ class TestNdpointSpatialMethod:
     def test_swath_matchup_3d_variable_expands(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Swath matchup with ndpoint expands 3-D variables (e.g. Rrs) into per-wavelength columns."""
+        """Swath matchup with kdtree expands 3-D variables (e.g. Rrs) into per-wavelength columns."""
         pytest.importorskip("scipy")
 
         wavelengths = [346, 348, 351]
@@ -5512,7 +5703,7 @@ class TestNdpointSpatialMethod:
             p,
             open_method="datatree-merge",
             variables=["Rrs"],
-            spatial_method="ndpoint",
+            spatial_method="kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -5524,7 +5715,7 @@ class TestNdpointSpatialMethod:
     def test_grid_matchup_returns_nearest_value(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """open_method='dataset' + spatial_method='ndpoint' returns the nearest grid value."""
+        """open_method='dataset' + spatial_method='kdtree' returns the nearest grid value."""
         pytest.importorskip("scipy")
 
         lats = [-90.0, 0.0, 90.0]
@@ -5563,7 +5754,7 @@ class TestNdpointSpatialMethod:
             p,
             open_method="dataset",
             variables=["sst"],
-            spatial_method="ndpoint",
+            spatial_method="kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -5617,17 +5808,17 @@ class TestNdpointSpatialMethod:
             p,
             open_method="datatree-merge",
             variables=["sst"],
-            spatial_method="ndpoint",
+            spatial_method="kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
         assert "sst" in result.columns
         assert len(result) == 2
         assert not result["sst"].isna().any()
 
-    def test_ndpoint_and_xoak_return_same_values(
+    def test_kdtree_and_xoak_kdtree_return_same_values(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """ndpoint and xoak return identical nearest-neighbour values for the same query."""
+        """kdtree and xoak-kdtree return identical nearest-neighbour values for the same query."""
         pytest.importorskip("scipy")
         pytest.importorskip("xoak")
 
@@ -5667,27 +5858,27 @@ class TestNdpointSpatialMethod:
         mock_ea.open.return_value = [nc_path]
         monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
 
-        result_ndpoint = pc.matchup(
+        result_kdtree = pc.matchup(
             make_plan(),
             open_method="dataset",
             variables=["sst"],
-            spatial_method="ndpoint",
+            spatial_method="kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
-        result_xoak = pc.matchup(
+        result_xoak_kdtree = pc.matchup(
             make_plan(),
             open_method="dataset",
             variables=["sst"],
-            spatial_method="xoak",
+            spatial_method="xoak-kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
-        assert result_ndpoint.loc[0, "sst"] == pytest.approx(result_xoak.loc[0, "sst"])
+        assert result_kdtree.loc[0, "sst"] == pytest.approx(result_xoak_kdtree.loc[0, "sst"])
 
     def test_grid_matchup_global_granule_returns_nearest_value(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """open_method='dataset' + ndpoint on a global granule slices correctly and returns a value."""
+        """open_method='dataset' + kdtree on a global granule slices correctly and returns a value."""
         pytest.importorskip("scipy")
 
         # Large global grid (181 lats × 361 lons) with the query point near centre.
@@ -5728,7 +5919,7 @@ class TestNdpointSpatialMethod:
             p,
             open_method="dataset",
             variables=["sst"],
-            spatial_method="ndpoint",
+            spatial_method="kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -5802,7 +5993,7 @@ class TestNdpointSpatialMethod:
             p,
             open_method="datatree-merge",
             variables=["sst"],
-            spatial_method="ndpoint",
+            spatial_method="kdtree",
             open_dataset_kwargs={"engine": "netcdf4"},
         )
 
@@ -6010,10 +6201,10 @@ class TestAutoSpatialMethod:
         )
         assert result_auto.loc[0, "sst"] == pytest.approx(result_nearest.loc[0, "sst"])
 
-    def test_auto_2d_routes_to_ndpoint(
+    def test_auto_2d_routes_to_kdtree(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """auto with 2-D coords routes to 'ndpoint' (scipy required)."""
+        """auto with 2-D coords routes to 'kdtree' (scipy required)."""
         pytest.importorskip("scipy")
         nc_path = str(tmp_path / "swath.nc")
         ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=42)
@@ -6049,10 +6240,10 @@ class TestAutoSpatialMethod:
         assert len(result) == 1
         assert not math.isnan(result.loc[0, "sst"])
 
-    def test_auto_2d_matches_ndpoint(
+    def test_auto_2d_matches_kdtree(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """auto with 2-D coords returns the same value as explicit ndpoint."""
+        """auto with 2-D coords returns the same value as explicit kdtree."""
         pytest.importorskip("scipy")
         nc_path = str(tmp_path / "swath.nc")
         ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=77)
@@ -6083,12 +6274,12 @@ class TestAutoSpatialMethod:
             make_plan(), open_method="dataset", variables=["sst"],
             spatial_method="auto", open_dataset_kwargs={"engine": "netcdf4"},
         )
-        mock_ea.open.return_value = [nc_path]  # reset: _execute_plan nulls the list in-place
-        result_ndpoint = pc.matchup(
+        mock_ea.open.return_value = [nc_path]  # ensure a fresh list for the second call
+        result_kdtree = pc.matchup(
             make_plan(), open_method="dataset", variables=["sst"],
-            spatial_method="ndpoint", open_dataset_kwargs={"engine": "netcdf4"},
+            spatial_method="kdtree", open_dataset_kwargs={"engine": "netcdf4"},
         )
-        assert result_auto.loc[0, "sst"] == pytest.approx(result_ndpoint.loc[0, "sst"])
+        assert result_auto.loc[0, "sst"] == pytest.approx(result_kdtree.loc[0, "sst"])
 
     def test_auto_prints_resolved_method(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
@@ -6122,7 +6313,7 @@ class TestAutoSpatialMethod:
         assert "'nearest'" in captured.out
         assert "1-D" in captured.out
 
-        # Test 2-D path (ndpoint)
+        # Test 2-D path (kdtree)
         nc_path_2d = str(tmp_path / "swath.nc")
         ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=42)
         ds_swath.to_netcdf(nc_path_2d, engine="netcdf4")
@@ -6144,7 +6335,7 @@ class TestAutoSpatialMethod:
                    open_dataset_kwargs={"engine": "netcdf4"})
         captured2 = capsys.readouterr()
         assert "spatial_method='auto'" in captured2.out
-        assert "'ndpoint'" in captured2.out
+        assert "'kdtree'" in captured2.out
         assert "2-D" in captured2.out
 
     def test_explicit_method_does_not_print_auto_message(
@@ -6194,7 +6385,7 @@ class TestAutoSpatialMethod:
     def test_explicit_nearest_with_2d_raises_useful_message(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Explicit nearest with 2-D coords raises ValueError mentioning 'auto'/'ndpoint'."""
+        """Explicit nearest with 2-D coords raises ValueError mentioning 'auto'/'kdtree'."""
         nc_path = str(tmp_path / "swath.nc")
         _make_l2_swath_dataset(nrows=4, ncols=5).to_netcdf(nc_path, engine="netcdf4")
         mock_ea = MagicMock()
@@ -6219,7 +6410,7 @@ class TestAutoSpatialMethod:
                 open_dataset_kwargs={"engine": "netcdf4"},
             )
 
-    def test_auto_xoak_never_selected(
+    def test_auto_xoak_kdtree_never_selected(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """auto never picks xoak even if xoak is installed; xoak must be explicit."""
@@ -6244,7 +6435,7 @@ class TestAutoSpatialMethod:
             source_kwargs={"short_name": "TEST"},
             time_buffer=pd.Timedelta(0),
         )
-        # Block xoak — auto should still succeed via ndpoint
+        # Block xoak — auto should still succeed via kdtree
         import sys
         for key in list(sys.modules.keys()):
             if key == "xoak" or key.startswith("xoak."):

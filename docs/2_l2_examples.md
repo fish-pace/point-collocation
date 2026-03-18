@@ -2,7 +2,7 @@
 
 * Create a plan for files to use `pc.plan()`
 * Print the plan to check it `print(plan.summary())`
-* Do the plan and get matchups `pc.matchup(plan, open_method="datatree-merge", spatial_method="xoak")`
+* Do the plan and get matchups `pc.matchup(plan, open_method="datatree-merge", spatial_method="xoak-kdtree")`
 
 ## Prerequisite -- Login to EarthData
 
@@ -216,7 +216,7 @@ plan.open_dataset(0)
 
 ## Get the matchups using that plan
 
-`pc.matchup()` with `open_method="datatree-merge"` opens each L2 granule as a DataTree and merges all groups into a flat dataset. Use `spatial_method="xoak"` for 2-D swath geolocation. I turn on `batch_size=5` and `silent=False` to watch the progress.
+`pc.matchup()` with `open_method="datatree-merge"` opens each L2 granule as a DataTree and merges all groups into a flat dataset. Use `spatial_method="xoak-kdtree"` for 2-D swath geolocation. I turn on `batch_size=5` and `silent=False` to watch the progress.
 
 Notice, that point 0 is matched to 2 granules and so has 2 rows with the same `pc_id`.
 
@@ -224,7 +224,7 @@ Notice, that point 0 is matched to 2 granules and so has 2 rows with the same `p
 ```python
 %%time
 # 1 min /
-res = pc.matchup(plan, spatial_method="xoak", variables=["Rrs"])
+res = pc.matchup(plan, spatial_method="xoak-kdtree", variables=["Rrs"])
 ```
 
     CPU times: user 32.3 s, sys: 2.28 s, total: 34.6 s
@@ -439,7 +439,7 @@ Pass to `open_method`:
 ```python
 %%time
 out = pc.matchup(plan, open_method=test, variables=["Rrs"],
-                     spatial_method="xoak")
+                     spatial_method="xoak-kdtree")
 ```
 
     CPU times: user 28 s, sys: 1.41 s, total: 29.4 s
