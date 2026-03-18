@@ -257,6 +257,7 @@ class Plan:
             _resolve_auto_spec,
             _suppress_dask_progress,
         )
+        from point_collocation.core.engine import _find_time_dim
 
         try:
             import earthaccess  # type: ignore[import-untyped]
@@ -315,7 +316,8 @@ class Plan:
             try:
                 ds, lon_n, lat_n = _apply_coords(ds, spec)
                 if not silent:
-                    print(_geoloc_description(ds, lon_n, lat_n, spec))
+                    time_dim = _find_time_dim(ds)
+                    print(_geoloc_description(ds, lon_n, lat_n, spec, time_dim=time_dim))
             except ValueError:
                 pass  # coords not found; return merged dataset as-is
             return ds
@@ -331,7 +333,8 @@ class Plan:
             try:
                 ds, lon_n, lat_n = _apply_coords(ds, spec)
                 if not silent:
-                    print(_geoloc_description(ds, lon_n, lat_n, spec))
+                    time_dim = _find_time_dim(ds)
+                    print(_geoloc_description(ds, lon_n, lat_n, spec, time_dim=time_dim))
             except ValueError:
                 pass  # coords not found; return dataset as-is
             return ds

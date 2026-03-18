@@ -3802,6 +3802,272 @@ class TestPlanOpenDataset:
         assert "Geolocation" not in captured.out
         assert "open_method" not in captured.out
 
+    def test_open_dataset_geolocation_includes_time_dim(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """open_dataset() reports the time dim in the Geolocation line when present."""
+        nc_path = str(tmp_path / "test_time.nc")
+        _make_l3_time_dataset(
+            [-90.0, 0.0, 90.0],
+            [-180.0, 0.0, 180.0],
+            times=["2023-06-01", "2023-06-02", "2023-06-03"],
+            seed=1,
+        ).to_netcdf(nc_path, engine="netcdf4")
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        ds = p.open_dataset(0, open_method={"open_kwargs": {"engine": "netcdf4"}})
+        ds.close()
+        captured = capsys.readouterr()
+        assert "time dim=" in captured.out
+        assert "3 step(s)" in captured.out
+
+    def test_open_dataset_geolocation_omits_time_dim_when_absent(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """open_dataset() does NOT report a time dim when the dataset has none."""
+        nc_path = str(tmp_path / "test_no_time.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=1).to_netcdf(
+            nc_path, engine="netcdf4"
+        )
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        ds = p.open_dataset(0, open_method={"open_kwargs": {"engine": "netcdf4"}})
+        ds.close()
+        captured = capsys.readouterr()
+        assert "Geolocation" in captured.out
+        assert "time dim=" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Tests for _geoloc_description time_dim parameter
+# ---------------------------------------------------------------------------
+
+
+class TestGeolocationDescription:
+    """Tests for _geoloc_description() with time_dim reporting."""
+
+    def test_no_time_dim_omits_time_info(self) -> None:
+        from point_collocation.core._open_method import _geoloc_description
+
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], [[1.0]])},
+            coords={"lat": [0.0], "lon": [0.0]},
+        )
+        desc = _geoloc_description(ds, "lon", "lat", {"coords": "auto"}, time_dim=None)
+        assert "time" not in desc
+
+    def test_time_dim_included_in_description(self) -> None:
+        from point_collocation.core._open_method import _geoloc_description
+
+        times = pd.to_datetime(["2023-06-01", "2023-06-02", "2023-06-03"])
+        ds = xr.Dataset(
+            {"sst": (["time", "lat", "lon"], [[[1.0]], [[2.0]], [[3.0]]])},
+            coords={"time": times, "lat": [0.0], "lon": [0.0]},
+        )
+        desc = _geoloc_description(ds, "lon", "lat", {"coords": "auto"}, time_dim="time")
+        assert "time dim='time'" in desc
+        assert "3 step(s)" in desc
+
+    def test_single_time_step_reported_correctly(self) -> None:
+        from point_collocation.core._open_method import _geoloc_description
+
+        times = pd.to_datetime(["2023-06-01"])
+        ds = xr.Dataset(
+            {"sst": (["time", "lat", "lon"], [[[1.0]]])},
+            coords={"time": times, "lat": [0.0], "lon": [0.0]},
+        )
+        desc = _geoloc_description(ds, "lon", "lat", {"coords": "auto"}, time_dim="time")
+        assert "time dim='time'" in desc
+        assert "1 step(s)" in desc
+
+    def test_time_dim_appended_to_specified_coords(self) -> None:
+        from point_collocation.core._open_method import _geoloc_description
+
+        times = pd.to_datetime(["2023-06-01", "2023-06-02"])
+        ds = xr.Dataset(
+            {"sst": (["time", "lat", "lon"], [[[1.0]], [[2.0]]])},
+            coords={"time": times, "lat": [0.0], "lon": [0.0]},
+        )
+        spec = {"coords": {"lat": "lat", "lon": "lon"}}
+        desc = _geoloc_description(ds, "lon", "lat", spec, time_dim="time")
+        assert "Geolocation specified" in desc
+        assert "time dim='time'" in desc
+        assert "2 step(s)" in desc
+
+
+# ---------------------------------------------------------------------------
+# Integration test with multi_time.nc fixture
+# ---------------------------------------------------------------------------
+
+
+class TestMultiTimeFixtureIntegration:
+    """End-to-end tests using the examples/fixtures/multi_time.nc fixture."""
+
+    FIXTURE_PATH = str(
+        pathlib.Path(__file__).parent.parent / "examples" / "fixtures" / "multi_time.nc"
+    )
+
+    def _make_plan(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        lat: float,
+        lon: float,
+        point_time: str,
+    ) -> "Plan":
+        """Build a plan that points to the multi_time.nc fixture."""
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [self.FIXTURE_PATH]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [lat], "lon": [lon], "time": pd.to_datetime([point_time])}
+        )
+        gm = GranuleMeta(
+            granule_id="multi_time.nc",
+            begin=pd.Timestamp("2024-01-01"),
+            end=pd.Timestamp("2024-12-31"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        return Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["uo"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+    def test_nearest_time_selects_expected_day(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nearest time selection retrieves a real value (not NaN) from multi_time.nc."""
+        p = self._make_plan(
+            monkeypatch,
+            lat=33.69,
+            lon=17.46,
+            point_time="2024-06-15",
+        )
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert len(result) == 1
+        assert "uo" in result.columns
+        assert not math.isnan(result.loc[0, "uo"]), (
+            "uo must be a real value — nearest time should be selected from multi_time.nc"
+        )
+
+    def test_different_point_times_select_different_values(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two points at the same location but different times should generally yield
+        different extracted values from the 366-day multi_time.nc fixture."""
+        # Build two separate plans with different point times.
+        mock_ea = MagicMock()
+        mock_ea.open.side_effect = [
+            [self.FIXTURE_PATH],
+            [self.FIXTURE_PATH],
+        ]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        gm = GranuleMeta(
+            granule_id="multi_time.nc",
+            begin=pd.Timestamp("2024-01-01"),
+            end=pd.Timestamp("2024-12-31"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+
+        def _build(point_time: str) -> "Plan":
+            pts = pd.DataFrame(
+                {"lat": [33.69], "lon": [17.46], "time": pd.to_datetime([point_time])}
+            )
+            return Plan(
+                points=pts,
+                results=[object()],
+                granules=[gm],
+                point_granule_map={0: [0]},
+                variables=["uo"],
+                source_kwargs={"short_name": "TEST"},
+                time_buffer=pd.Timedelta(0),
+            )
+
+        kwargs = {"open_method": "dataset", "open_dataset_kwargs": {"engine": "netcdf4"}}
+        r_jan = pc.matchup(_build("2024-01-15"), **kwargs)
+        r_jul = pc.matchup(_build("2024-07-15"), **kwargs)
+
+        assert not math.isnan(r_jan.loc[0, "uo"])
+        assert not math.isnan(r_jul.loc[0, "uo"])
+        # January and July sea-current values should differ (different time steps).
+        assert r_jan.loc[0, "uo"] != pytest.approx(r_jul.loc[0, "uo"]), (
+            "Expected different uo values for Jan-15 vs Jul-15 in multi_time.nc"
+        )
+
+    def test_open_dataset_reports_time_dim_for_multi_time_fixture(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """open_dataset() prints the time dim info when opening multi_time.nc."""
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [self.FIXTURE_PATH]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [33.69], "lon": [17.46], "time": pd.to_datetime(["2024-06-15"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[],
+            point_granule_map={0: []},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        ds = p.open_dataset(0, open_method={"open_kwargs": {"engine": "netcdf4"}})
+        ds.close()
+        captured = capsys.readouterr()
+        assert "time dim='time'" in captured.out
+        assert "366 step(s)" in captured.out
+
 
 # ---------------------------------------------------------------------------
 # Helper: create a grouped NetCDF4 file (HDF5 with subgroups)

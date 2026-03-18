@@ -505,7 +505,13 @@ def _apply_coords(ds: xr.Dataset, spec: dict) -> tuple[xr.Dataset, str, str]:
     )
 
 
-def _geoloc_description(ds: "xr.Dataset", lon_name: str, lat_name: str, spec: dict) -> str:
+def _geoloc_description(
+    ds: "xr.Dataset",
+    lon_name: str,
+    lat_name: str,
+    spec: dict,
+    time_dim: "str | None" = None,
+) -> str:
     """Return a human-readable geolocation line for printing in open_dataset.
 
     The description notes *how* the pair was found:
@@ -513,6 +519,17 @@ def _geoloc_description(ds: "xr.Dataset", lon_name: str, lat_name: str, spec: di
     * ``"auto detected with cf_xarray"`` — CF-convention attributes used.
     * ``"auto detected by name"`` — name-based fallback used.
     * ``"specified"`` — caller provided an explicit ``coords`` dict.
+
+    When *time_dim* is not ``None``, the time dimension name and the number
+    of time steps are appended to the description.  When *time_dim* is
+    ``None`` (dataset has no time dimension) nothing is appended.
+
+    Parameters
+    ----------
+    time_dim:
+        Name of the time dimension detected by
+        :func:`~point_collocation.core.engine._find_time_dim`, or ``None``
+        if the dataset has no time dimension.
     """
     coords = spec.get("coords", "auto")
 
@@ -522,12 +539,18 @@ def _geoloc_description(ds: "xr.Dataset", lon_name: str, lat_name: str, spec: di
     pair_str = f"({lon_name!r}, {lat_name!r})"
 
     if isinstance(coords, dict):
-        return f"Geolocation specified: {pair_str} — {dims_str}"
+        base = f"Geolocation specified: {pair_str} — {dims_str}"
+    else:
+        # "auto" or list — check whether cf_xarray drove the detection.
+        cf_lons = _cf_geoloc_names(ds, "longitude")
+        method = "auto detected with cf_xarray" if lon_name in cf_lons else "auto detected by name"
+        base = f"Geolocation {method}: {pair_str} — {dims_str}"
 
-    # "auto" or list — check whether cf_xarray drove the detection.
-    cf_lons = _cf_geoloc_names(ds, "longitude")
-    method = "auto detected with cf_xarray" if lon_name in cf_lons else "auto detected by name"
-    return f"Geolocation {method}: {pair_str} — {dims_str}"
+    if time_dim is not None:
+        n_times = ds.sizes[time_dim]
+        base += f"; time dim={time_dim!r} ({n_times} step(s))"
+
+    return base
 
 
 # ---------------------------------------------------------------------------
