@@ -383,7 +383,7 @@ plt.show()
 res = pc.matchup(plan, 
                  variables = ["mean_ssha"], 
                  open_method=icesat2_atl21,
-                 spatial_method="xoak")
+                 spatial_method="xoak-kdtree")
 ```
 
 The full `res` output shows the granules and granules closest lat/lon. Here is just the matchups.

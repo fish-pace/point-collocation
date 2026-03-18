@@ -14,7 +14,7 @@ Examples
 
     out = pc.matchup(plan, open_method=pace_l3, variables=["Rrs_412"])
     out = pc.matchup(plan, open_method=pace_l2, variables=["Rrs_412"],
-                     spatial_method="xoak")
+                     spatial_method="xoak-kdtree")
 
 Each profile may omit most keys and rely on the shared open_kwargs defaults
 (``chunks={}``, ``engine="h5netcdf"``, ``decode_timedelta=False``).
@@ -40,7 +40,7 @@ pace_l3: dict = {
 #: Open-method profile for PACE OCI Level-2 swath products.
 #:
 #: Opens as a DataTree and merges all groups into a single flat Dataset.
-#: For spatial matching, pass ``spatial_method="xoak"`` to
+#: For spatial matching, pass ``spatial_method="xoak-kdtree"`` to
 #: :func:`~point_collocation.matchup`.
 pace_l2: dict = {
     "xarray_open": "datatree",
