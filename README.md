@@ -10,7 +10,7 @@ Full documentation is available at: **<https://fish-pace.github.io/point-colloca
 - [Quickstart](https://fish-pace.github.io/point-collocation/quickstart/)
 - [API Reference](https://fish-pace.github.io/point-collocation/api/)
 
-Examples are included for PACE, MUR, TEMPO, ICESat-2 ATL21, ECCO and DISCOVR EPIC.
+Examples are included for PACE, MUR, TEMPO, ICESat-2 ATL21, ECCO and DISCOVR EPIC. Distance metrics include 1D euclidian, 2D kdtree and 2D haversine for distances near poles.
 
 ## PyPI
 

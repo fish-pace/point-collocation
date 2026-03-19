@@ -35,6 +35,12 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from point_collocation.core._coord_spec import (
+    _POINTS_TIME_CANDIDATES,
+    _POINTS_X_CANDIDATES,
+    _POINTS_Y_CANDIDATES,
+    _detect_points_col_from_candidates,
+)
 from point_collocation.core.types import PointsFrame
 
 if TYPE_CHECKING:
@@ -44,7 +50,14 @@ if TYPE_CHECKING:
 # Data classes
 # ---------------------------------------------------------------------------
 
-_REQUIRED_COLUMNS = {"lat", "lon", "time"}
+# Canonical column names after normalisation.  These are the names used
+# throughout the matchup pipeline after _plan_normalise_columns() has run.
+_CANONICAL_LAT = "lat"
+_CANONICAL_LON = "lon"
+_CANONICAL_TIME = "time"
+
+# Columns that must be present (after normalisation) for a plan to be built.
+_REQUIRED_COLUMNS = {_CANONICAL_LAT, _CANONICAL_LON, _CANONICAL_TIME}
 
 
 @dataclass
@@ -108,6 +121,18 @@ class Plan:
     variables: list[str] = field(default_factory=list)
     source_kwargs: dict[str, Any] = field(default_factory=dict)
     time_buffer: pd.Timedelta = field(default_factory=lambda: pd.Timedelta(0))
+
+    # Original column names as detected in the user's points DataFrame, before
+    # normalisation to the canonical "lat"/"lon"/"time" names.  Used for
+    # transparent reporting in plan.open_dataset() and pc.matchup() output.
+    pts_y_col_original: str = field(default=_CANONICAL_LAT)
+    """Original latitude column name detected in the user's points DataFrame."""
+
+    pts_x_col_original: str = field(default=_CANONICAL_LON)
+    """Original longitude column name detected in the user's points DataFrame."""
+
+    pts_time_col_original: str = field(default=_CANONICAL_TIME)
+    """Original time column name detected in the user's points DataFrame."""
 
     # ------------------------------------------------------------------
     # Indexing — plan[0] returns a result object; plan[0:10] returns a
@@ -180,6 +205,9 @@ class Plan:
             variables=list(self.variables),
             source_kwargs=dict(self.source_kwargs),
             time_buffer=self.time_buffer,
+            pts_y_col_original=self.pts_y_col_original,
+            pts_x_col_original=self.pts_x_col_original,
+            pts_time_col_original=self.pts_time_col_original,
         )
 
     # ------------------------------------------------------------------
@@ -191,6 +219,7 @@ class Plan:
         result: "int | Any",
         open_method: "str | dict | None" = None,
         *,
+        coord_spec: "dict | None" = None,
         silent: bool = False,
     ) -> "Any":
         """Open a single granule result as an :class:`xarray.Dataset` or DataTree.
@@ -222,9 +251,16 @@ class Plan:
             Pass open-function kwargs via the ``"open_kwargs"`` key of a
             dict spec, e.g.
             ``open_method={"open_kwargs": {"engine": "netcdf4"}}``.
+        coord_spec:
+            Coordinate specification controlling how axis/coordinate names are
+            interpreted for both the source dataset and the points DataFrame.
+            Defaults to auto-detection of lat/lon/time from standard name
+            candidates.  See :data:`~point_collocation.core._coord_spec.DEFAULT_COORD_SPEC`
+            for the full structure.
         silent:
             When ``False`` (default), print the effective open_method spec
-            actually used (after normalization and auto-resolution).
+            actually used (after normalization and auto-resolution) and a
+            geolocation summary line.
             Set to ``True`` to suppress this output.
 
         Returns
@@ -301,10 +337,41 @@ class Plan:
             if reason:
                 print(f"open_method='auto' switched to 'datatree': {reason}")
 
+        def _try_print_geoloc(
+            ds: "xr.Dataset",
+            spec: dict,
+            *,
+            silent: bool,
+            plan: "Plan",
+            coord_spec: "dict | None",
+        ) -> None:
+            """Print geolocation summary or a 'not found' note."""
+            if silent:
+                return
+            try:
+                ds_coord, lon_n, lat_n = _apply_coords(ds, spec)
+                time_dim = _find_time_dim(ds_coord)
+                print(
+                    _geoloc_description(
+                        ds_coord,
+                        lon_n,
+                        lat_n,
+                        spec,
+                        time_dim=time_dim,
+                        pts_y_col=plan.pts_y_col_original,
+                        pts_x_col=plan.pts_x_col_original,
+                        pts_time_col=plan.pts_time_col_original,
+                    )
+                )
+            except ValueError as exc:
+                print(f"Geolocation: could not detect lat/lon in dataset — {exc}")
+
         if xarray_open == "datatree":
             merge = spec.get("merge")
             if merge is None:
                 # Return the raw DataTree without merging — like open_datatree(f).
+                if not silent:
+                    print("Geolocation: DataTree returned without merging — no geolocation summary.")
                 return _open_datatree_fn(file_obj, effective_kwargs)
             # merge is "all", "root", or a list: merge groups into a flat Dataset.
             dt = _open_datatree_fn(file_obj, effective_kwargs)
@@ -313,13 +380,7 @@ class Plan:
             finally:
                 if hasattr(dt, "close"):
                     dt.close()
-            try:
-                ds, lon_n, lat_n = _apply_coords(ds, spec)
-                if not silent:
-                    time_dim = _find_time_dim(ds)
-                    print(_geoloc_description(ds, lon_n, lat_n, spec, time_dim=time_dim))
-            except ValueError:
-                pass  # coords not found; return merged dataset as-is
+            _try_print_geoloc(ds, spec, silent=silent, plan=self, coord_spec=coord_spec)
             return ds
 
         if xarray_open == "dataset":
@@ -330,13 +391,7 @@ class Plan:
             else:
                 with _suppress_dask_progress():
                     ds = xr.open_dataset(file_obj, **effective_kwargs)  # type: ignore[arg-type]
-            try:
-                ds, lon_n, lat_n = _apply_coords(ds, spec)
-                if not silent:
-                    time_dim = _find_time_dim(ds)
-                    print(_geoloc_description(ds, lon_n, lat_n, spec, time_dim=time_dim))
-            except ValueError:
-                pass  # coords not found; return dataset as-is
+            _try_print_geoloc(ds, spec, silent=silent, plan=self, coord_spec=coord_spec)
             return ds
 
         raise ValueError(
@@ -574,7 +629,7 @@ def plan(
             "Currently only 'earthaccess' is supported."
         )
 
-    points = _plan_normalise_time(points)
+    points, y_orig, x_orig, time_orig = _plan_normalise_columns(points)
     _plan_validate_points(points)
 
     buffer = _parse_time_buffer(time_buffer)
@@ -588,6 +643,9 @@ def plan(
         point_granule_map=point_granule_map,
         source_kwargs=dict(source_kwargs or {}),
         time_buffer=buffer,
+        pts_y_col_original=y_orig,
+        pts_x_col_original=x_orig,
+        pts_time_col_original=time_orig,
     )
 
 
@@ -596,29 +654,99 @@ def plan(
 # ---------------------------------------------------------------------------
 
 
+def _plan_normalise_columns(
+    points: PointsFrame,
+) -> "tuple[PointsFrame, str, str, str]":
+    """Detect and normalise lat/lon/time column names in *points*.
+
+    Returns ``(normalised_df, y_original, x_original, time_original)`` where
+    *normalised_df* always has ``"lat"``, ``"lon"``, and ``"time"`` columns
+    (renamed from whatever candidates were detected), and the *_original
+    names record what was detected in the user's DataFrame for transparent
+    reporting.
+
+    Detection strategy
+    ------------------
+    * **time**: if ``"time"`` is present, use it; if ``"date"`` is present,
+      rename to ``"time"`` and set time-of-day to noon (12:00 UTC) to
+      represent date-only inputs.  Other candidate names (``"TIME"``,
+      ``"DATE"``, ``"Time"``, ``"Date"``) are also tried.
+    * **y (latitude)**: tries ``lat``, ``latitude``, ``Latitude``, ``LATITUDE``
+      in order; normalises the detected column to ``"lat"``.
+    * **x (longitude)**: tries ``lon``, ``longitude``, ``Longitude``,
+      ``LONGITUDE`` in order; normalises to ``"lon"``.
+
+    If a column is already named with the canonical name (``"lat"``, ``"lon"``,
+    ``"time"``), no rename is performed and the original/canonical names are
+    identical.
+
+    If none of the candidates are found, the DataFrame is returned as-is with
+    the canonical name as the "original" placeholder; the subsequent
+    :func:`_plan_validate_points` step raises a clear error.
+    """
+    out = points.copy()
+
+    # ------------------------------------------------------------------
+    # Time
+    # ------------------------------------------------------------------
+    # Detect the time column (respects all candidates).
+    time_orig: str = _CANONICAL_TIME
+    if _CANONICAL_TIME not in out.columns:
+        # Try candidates other than the canonical name.
+        for cand in _POINTS_TIME_CANDIDATES:
+            if cand in out.columns:
+                time_orig = cand
+                # "date" alias: set time-of-day to noon.
+                if cand in ("date", "Date", "DATE"):
+                    out = out.rename(columns={cand: _CANONICAL_TIME})
+                    out[_CANONICAL_TIME] = (
+                        pd.to_datetime(out[_CANONICAL_TIME]).dt.normalize()
+                        + pd.Timedelta(hours=12)
+                    )
+                else:
+                    out = out.rename(columns={cand: _CANONICAL_TIME})
+                    out[_CANONICAL_TIME] = pd.to_datetime(out[_CANONICAL_TIME])
+                break
+        # If still absent, fall through — validation will raise.
+    else:
+        out[_CANONICAL_TIME] = pd.to_datetime(out[_CANONICAL_TIME])
+
+    # ------------------------------------------------------------------
+    # y (latitude)
+    # ------------------------------------------------------------------
+    y_orig: str = _CANONICAL_LAT
+    if _CANONICAL_LAT not in out.columns:
+        for cand in _POINTS_Y_CANDIDATES:
+            if cand in out.columns and cand != _CANONICAL_LAT:
+                y_orig = cand
+                out = out.rename(columns={cand: _CANONICAL_LAT})
+                break
+        # If still absent, fall through — validation will raise.
+
+    # ------------------------------------------------------------------
+    # x (longitude)
+    # ------------------------------------------------------------------
+    x_orig: str = _CANONICAL_LON
+    if _CANONICAL_LON not in out.columns:
+        for cand in _POINTS_X_CANDIDATES:
+            if cand in out.columns and cand != _CANONICAL_LON:
+                x_orig = cand
+                out = out.rename(columns={cand: _CANONICAL_LON})
+                break
+        # If still absent, fall through — validation will raise.
+
+    return out, y_orig, x_orig, time_orig
+
+
 def _plan_normalise_time(points: PointsFrame) -> PointsFrame:
     """Return *points* with a ``time`` column.
 
-    * If ``time`` is already present, a copy is returned with the column
-      converted to :class:`pandas.Timestamp`.
-    * If only ``date`` is present, it is renamed to ``time`` and the
-      time-of-day is set to **noon (12:00 UTC)** to represent date-only
-      inputs in temporal matching.
-    * If neither column exists, the DataFrame is returned as-is (the
-      subsequent validation step raises the appropriate error).
+    .. deprecated::
+        Use :func:`_plan_normalise_columns` instead.  This function is kept
+        for backward compatibility and now delegates to it.
     """
-    if "time" in points.columns:
-        out = points.copy()
-        out["time"] = pd.to_datetime(out["time"])
-        return out
-
-    if "date" in points.columns:
-        out = points.copy().rename(columns={"date": "time"})
-        out["time"] = pd.to_datetime(out["time"]).dt.normalize() + pd.Timedelta(hours=12)
-        return out
-
-    # Neither column present — return unchanged so validation can raise.
-    return points
+    out, _, _, _ = _plan_normalise_columns(points)
+    return out
 
 
 def _plan_validate_points(points: PointsFrame) -> None:
@@ -626,7 +754,13 @@ def _plan_validate_points(points: PointsFrame) -> None:
     missing = _REQUIRED_COLUMNS - set(points.columns)
     if missing:
         raise ValueError(
-            f"points DataFrame is missing required columns: {sorted(missing)}"
+            f"points DataFrame is missing required columns: {sorted(missing)}. "
+            "Accepted column name variants:\n"
+            f"  latitude (y): {_POINTS_Y_CANDIDATES}\n"
+            f"  longitude (x): {_POINTS_X_CANDIDATES}\n"
+            f"  time:          {_POINTS_TIME_CANDIDATES}\n"
+            "Rename the column(s) to one of the accepted names, or use "
+            "coord_spec to configure custom names."
         )
 
     if "pc_id" in points.columns:

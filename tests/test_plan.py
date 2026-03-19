@@ -24,6 +24,7 @@ from point_collocation.core.plan import (
     _get_umm,
     _match_points_to_granules,
     _parse_time_buffer,
+    _plan_normalise_columns,
     _plan_normalise_time,
     _point_in_polygon,
     _search_earthaccess,
@@ -2084,6 +2085,7 @@ class TestMatchupWithPlan:
         )
 
         # batch_size=1 → 3 lines of output for 3 granules
+        # (plus one "Points columns" header line → filter it out for the count check)
         pc.matchup(
             p,
             open_method="dataset",
@@ -2093,7 +2095,7 @@ class TestMatchupWithPlan:
             spatial_method="nearest",
         )
         captured = capsys.readouterr()
-        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+        lines = [ln for ln in captured.out.splitlines() if ln.strip() and "granules" in ln]
         assert len(lines) == 3
         # Each line must follow the documented format
         for line in lines:
@@ -2636,10 +2638,11 @@ class TestNewOutputColumns:
 
         # With silent=False and default batch_size, only one progress line should appear
         # (all 3 granules processed in a single batch).
+        # (A "Points columns" header line is also printed; filter it out.)
         pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"},
                    silent=False, spatial_method="nearest")
         captured = capsys.readouterr()
-        lines = [ln for ln in captured.out.strip().splitlines() if ln.strip()]
+        lines = [ln for ln in captured.out.strip().splitlines() if ln.strip() and "granules" in ln]
         assert len(lines) == 1, (
             f"Expected 1 progress line (all granules in one batch), got {len(lines)}: {lines}"
         )
@@ -3044,7 +3047,7 @@ class TestGranuleRange:
             spatial_method="nearest",
         )
         captured = capsys.readouterr()
-        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+        lines = [ln for ln in captured.out.splitlines() if ln.strip() and "granules" in ln]
         # Two batches of 1 granule each → 2 progress lines
         assert len(lines) == 2
         # Lines must use absolute numbers (2, 3) and report against the full plan total (3)
@@ -7385,3 +7388,683 @@ class TestSuppressDaskProgress:
 
         captured = capsys.readouterr()
         assert "nested suppression" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Tests for _plan_normalise_columns (new function)
+# ---------------------------------------------------------------------------
+
+class TestPlanNormaliseColumns:
+    """Tests for _plan_normalise_columns, which extends time normalization to y/x."""
+
+    def test_standard_columns_unchanged(self) -> None:
+        pts = pd.DataFrame({
+            "lat": [34.0], "lon": [-120.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        out, y_orig, x_orig, time_orig = _plan_normalise_columns(pts)
+        assert list(out.columns) == list(pts.columns)
+        assert y_orig == "lat"
+        assert x_orig == "lon"
+        assert time_orig == "time"
+
+    def test_latitude_longitude_renamed(self) -> None:
+        pts = pd.DataFrame({
+            "latitude": [34.0], "longitude": [-120.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        out, y_orig, x_orig, time_orig = _plan_normalise_columns(pts)
+        assert "lat" in out.columns
+        assert "lon" in out.columns
+        assert "latitude" not in out.columns
+        assert "longitude" not in out.columns
+        assert y_orig == "latitude"
+        assert x_orig == "longitude"
+        assert time_orig == "time"
+
+    def test_LATITUDE_LONGITUDE_renamed(self) -> None:
+        pts = pd.DataFrame({
+            "LATITUDE": [34.0], "LONGITUDE": [-120.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        out, y_orig, x_orig, time_orig = _plan_normalise_columns(pts)
+        assert "lat" in out.columns
+        assert "lon" in out.columns
+        assert y_orig == "LATITUDE"
+        assert x_orig == "LONGITUDE"
+
+    def test_date_renamed_to_time_with_noon(self) -> None:
+        pts = pd.DataFrame({
+            "lat": [34.0], "lon": [-120.0],
+            "date": pd.to_datetime(["2023-06-01"]),
+        })
+        out, y_orig, x_orig, time_orig = _plan_normalise_columns(pts)
+        assert "time" in out.columns
+        assert "date" not in out.columns
+        assert time_orig == "date"
+        assert out.loc[0, "time"].hour == 12  # noon default
+
+    def test_TIME_renamed_to_time(self) -> None:
+        pts = pd.DataFrame({
+            "lat": [34.0], "lon": [-120.0],
+            "TIME": pd.to_datetime(["2023-06-01T08:00:00"]),
+        })
+        out, y_orig, x_orig, time_orig = _plan_normalise_columns(pts)
+        assert "time" in out.columns
+        assert "TIME" not in out.columns
+        assert time_orig == "TIME"
+        assert out.loc[0, "time"].hour == 8  # time preserved, not set to noon
+
+    def test_extra_columns_preserved(self) -> None:
+        pts = pd.DataFrame({
+            "latitude": [34.0], "longitude": [-120.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            "depth": [10.0],
+            "satellite": ["AQUA"],
+        })
+        out, _, _, _ = _plan_normalise_columns(pts)
+        assert "depth" in out.columns
+        assert "satellite" in out.columns
+        assert out.loc[0, "depth"] == 10.0
+
+
+# ---------------------------------------------------------------------------
+# Tests for coord_spec module
+# ---------------------------------------------------------------------------
+
+class TestCoordSpecModule:
+    """Tests for the coord_spec helpers in _coord_spec.py."""
+
+    def test_default_coord_spec_importable(self) -> None:
+        from point_collocation.core._coord_spec import DEFAULT_COORD_SPEC
+        assert "location" in DEFAULT_COORD_SPEC
+        assert "additional" in DEFAULT_COORD_SPEC
+        assert "time" in DEFAULT_COORD_SPEC["additional"]
+
+    def test_normalize_none_returns_defaults(self) -> None:
+        from point_collocation.core._coord_spec import _normalize_coord_spec, DEFAULT_COORD_SPEC
+        result = _normalize_coord_spec(None)
+        assert result == DEFAULT_COORD_SPEC
+
+    def test_normalize_partial_spec_fills_defaults(self) -> None:
+        from point_collocation.core._coord_spec import _normalize_coord_spec
+        spec = {"location": {"coordinate_system": "geographic"}}
+        result = _normalize_coord_spec(spec)
+        assert result["location"]["y"]["source"] == "auto"
+        assert result["location"]["y"]["points"] == "auto"
+        assert result["location"]["x"]["source"] == "auto"
+        assert result["additional"]["time"]["points"] == "auto"
+
+    def test_normalize_with_additional_axes(self) -> None:
+        from point_collocation.core._coord_spec import _normalize_coord_spec
+        spec = {
+            "additional": {
+                "depth": {"source": "z", "points": "depth"},
+            }
+        }
+        result = _normalize_coord_spec(spec)
+        assert result["additional"]["depth"]["source"] == "z"
+        assert result["additional"]["depth"]["points"] == "depth"
+        assert result["additional"]["time"]["source"] == "auto"  # default added
+
+    def test_validate_invalid_coordinate_system(self) -> None:
+        from point_collocation.core._coord_spec import _validate_coord_spec
+        with pytest.raises(ValueError, match="coordinate_system"):
+            _validate_coord_spec({"location": {"coordinate_system": "planar"}})
+
+    def test_resolve_points_cols_standard(self) -> None:
+        from point_collocation.core._coord_spec import resolve_points_columns
+        pts = pd.DataFrame({
+            "lat": [1.0], "lon": [2.0], "time": pd.to_datetime(["2023-06-01"]),
+        })
+        result = resolve_points_columns(pts)
+        assert result["y"] == "lat"
+        assert result["x"] == "lon"
+        assert result["time"] == "time"
+
+    def test_resolve_points_cols_latitude_longitude(self) -> None:
+        from point_collocation.core._coord_spec import resolve_points_columns
+        pts = pd.DataFrame({
+            "latitude": [1.0], "longitude": [2.0],
+            "time": pd.to_datetime(["2023-06-01"]),
+        })
+        result = resolve_points_columns(pts)
+        assert result["y"] == "latitude"
+        assert result["x"] == "longitude"
+
+    def test_resolve_points_cols_ambiguous_raises(self) -> None:
+        from point_collocation.core._coord_spec import resolve_points_columns
+        pts = pd.DataFrame({
+            "lat": [1.0], "latitude": [1.0], "lon": [2.0],
+            "time": pd.to_datetime(["2023-06-01"]),
+        })
+        with pytest.raises(ValueError, match="Ambiguous"):
+            resolve_points_columns(pts)
+
+    def test_resolve_points_cols_missing_raises(self) -> None:
+        from point_collocation.core._coord_spec import resolve_points_columns
+        pts = pd.DataFrame({"x": [1.0], "y": [2.0], "time": pd.to_datetime(["2023-06-01"])})
+        with pytest.raises(ValueError, match="auto-detect"):
+            resolve_points_columns(pts)
+
+    def test_resolve_points_cols_additional_axis_present(self) -> None:
+        from point_collocation.core._coord_spec import resolve_points_columns
+        spec = {
+            "additional": {
+                "time": {"source": "auto", "points": "auto"},
+                "depth": {"source": "z", "points": "depth"},
+            }
+        }
+        pts = pd.DataFrame({
+            "lat": [1.0], "lon": [2.0],
+            "time": pd.to_datetime(["2023-06-01"]),
+            "depth": [10.0],
+        })
+        result = resolve_points_columns(pts, spec)
+        assert result["depth"] == "depth"
+
+    def test_resolve_points_cols_additional_axis_absent_silently_skipped(self) -> None:
+        from point_collocation.core._coord_spec import resolve_points_columns
+        spec = {
+            "additional": {
+                "time": {"source": "auto", "points": "auto"},
+                "depth": {"source": "z", "points": "depth"},
+            }
+        }
+        pts = pd.DataFrame({
+            "lat": [1.0], "lon": [2.0],
+            "time": pd.to_datetime(["2023-06-01"]),
+            # no "depth" column
+        })
+        result = resolve_points_columns(pts, spec)
+        assert "depth" not in result  # silently skipped
+
+    def test_resolve_points_cols_explicit_nonexistent_raises(self) -> None:
+        from point_collocation.core._coord_spec import resolve_points_columns
+        spec = {"location": {"y": {"points": "nonexistent"}}}
+        pts = pd.DataFrame({
+            "lat": [1.0], "lon": [2.0],
+            "time": pd.to_datetime(["2023-06-01"]),
+        })
+        with pytest.raises(ValueError, match="nonexistent"):
+            resolve_points_columns(pts, spec)
+
+
+# ---------------------------------------------------------------------------
+# Tests for matchup() coord_spec parameter
+# ---------------------------------------------------------------------------
+
+class TestMatchupWithCoordSpec:
+    """Tests for coord_spec parameter in pc.matchup()."""
+
+    def _make_plan_with_depth(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> tuple[Plan, str]:
+        """Build a plan with depth column in points and a depth-like dataset."""
+        # Dataset with (z, lat, lon) dimensions
+        lats = np.array([-10.0, 0.0, 10.0])
+        lons = np.array([-10.0, 0.0, 10.0])
+        depths = np.array([0.0, 10.0, 50.0, 100.0])
+        rng = np.random.default_rng(42)
+        data = rng.uniform(15.0, 25.0, (len(depths), len(lats), len(lons))).astype(np.float32)
+        ds = xr.Dataset(
+            {"temp": (["z", "lat", "lon"], data)},
+            coords={"z": depths, "lat": lats, "lon": lons},
+        )
+        nc_path = str(tmp_path / "depth_dataset.nc")
+        ds.to_netcdf(nc_path)
+
+        pts = pd.DataFrame({
+            "lat": [0.0],
+            "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+            "depth": [10.0],
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/depth_dataset.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        pgm = {0: [0]}
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map=pgm,
+            variables=["temp"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        return p, nc_path
+
+    def test_matchup_accepts_coord_spec_param(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """matchup() accepts a coord_spec kwarg without raising."""
+        nc_path = str(tmp_path / "g.nc")
+        _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame({
+            "lat": [0.0], "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts, results=[object()], granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"], source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        # Should not raise
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            spatial_method="nearest",
+            coord_spec={"additional": {"time": {"source": "auto", "points": "auto"}}},
+        )
+        assert "sst" in result.columns
+
+    def test_matchup_with_depth_additional_axis(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With coord_spec depth axis configured, matchup selects at the point depth."""
+        p, _ = self._make_plan_with_depth(tmp_path, monkeypatch)
+
+        coord_spec = {
+            "additional": {
+                "time": {"source": "auto", "points": "auto"},
+                "depth": {"source": "z", "points": "depth"},
+            }
+        }
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            spatial_method="nearest",
+            coord_spec=coord_spec,
+        )
+        assert "temp" in result.columns
+        # result should be a scalar (depth was selected), not expanded into temp_0, temp_10, ...
+        assert not any(c.startswith("temp_") for c in result.columns)
+        assert not result["temp"].isna().all()
+
+    def test_matchup_without_depth_expands_columns(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without depth axis, matchup expands the z dimension into temp_0, temp_10, etc."""
+        p, _ = self._make_plan_with_depth(tmp_path, monkeypatch)
+
+        # No coord_spec (default): depth is not configured → z dim expands
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            spatial_method="nearest",
+        )
+        # Should have expanded columns like temp_0, temp_10, temp_50, temp_100
+        expanded_cols = [c for c in result.columns if c.startswith("temp_")]
+        assert len(expanded_cols) > 0  # expanded
+
+    def test_matchup_prints_coord_spec_summary_when_not_silent(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture
+    ) -> None:
+        """When silent=False, matchup prints resolved points column names."""
+        nc_path = str(tmp_path / "g.nc")
+        _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame({
+            "lat": [0.0], "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts, results=[object()], granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"], source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        pc.matchup(
+            p,
+            open_method="dataset",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            spatial_method="nearest",
+            silent=False,
+        )
+        captured = capsys.readouterr()
+        output = captured.out
+        assert "Points columns:" in output
+        assert "y='lat'" in output
+        assert "x='lon'" in output
+        assert "time='time'" in output
+
+
+# ---------------------------------------------------------------------------
+# Tests for auto-detection of column name variants in plan()
+# ---------------------------------------------------------------------------
+
+class TestPlanAutoDetectsColumnNames:
+    """Tests for auto-detection of latitude/longitude/time column variants in plan()."""
+
+    def test_latitude_longitude_columns_accepted(self) -> None:
+        """plan() should accept 'latitude'/'longitude' column names."""
+        pts = pd.DataFrame({
+            "latitude": [34.0, -10.0],
+            "longitude": [-120.0, 50.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00", "2023-06-01T12:00:00"]),
+        })
+        out, y_orig, x_orig, time_orig = _plan_normalise_columns(pts)
+        from point_collocation.core.plan import _plan_validate_points
+        # Should not raise
+        _plan_validate_points(out)
+        assert y_orig == "latitude"
+        assert x_orig == "longitude"
+
+    def test_LATITUDE_LONGITUDE_columns_accepted(self) -> None:
+        """plan() should accept 'LATITUDE'/'LONGITUDE' column names."""
+        pts = pd.DataFrame({
+            "LATITUDE": [34.0], "LONGITUDE": [-120.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        out, y_orig, x_orig, _ = _plan_normalise_columns(pts)
+        from point_collocation.core.plan import _plan_validate_points
+        _plan_validate_points(out)
+        assert y_orig == "LATITUDE"
+        assert x_orig == "LONGITUDE"
+
+    def test_Latitude_Longitude_columns_accepted(self) -> None:
+        """plan() should accept 'Latitude'/'Longitude' column names."""
+        pts = pd.DataFrame({
+            "Latitude": [34.0], "Longitude": [-120.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        out, y_orig, x_orig, _ = _plan_normalise_columns(pts)
+        from point_collocation.core.plan import _plan_validate_points
+        _plan_validate_points(out)
+        assert y_orig == "Latitude"
+        assert x_orig == "Longitude"
+
+    def test_original_col_names_stored_in_plan(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Plan.pts_y_col_original and similar store the original detected names."""
+        pts = pd.DataFrame({
+            "latitude": [34.0], "longitude": [-120.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        # Use _plan_normalise_columns directly and check returned values
+        out, y_orig, x_orig, time_orig = _plan_normalise_columns(pts)
+        assert y_orig == "latitude"
+        assert x_orig == "longitude"
+        assert time_orig == "time"
+        # Canonical names in output
+        assert "lat" in out.columns
+        assert "lon" in out.columns
+
+    def test_invalid_columns_raise_descriptive_error(self) -> None:
+        """Missing columns raise ValueError that mentions candidate names."""
+        from point_collocation.core.plan import _plan_validate_points
+        # After normalise_columns, if nothing matches validation should raise
+        pts = pd.DataFrame({"x_coord": [1.0], "y_coord": [2.0], "time": pd.to_datetime(["2023-06-01"])})
+        out, _, _, _ = _plan_normalise_columns(pts)
+        with pytest.raises(ValueError, match="lat"):
+            _plan_validate_points(out)
+
+    def test_plan_with_latitude_longitude_normalised_for_matching(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After normalisation, plan.points always has 'lat', 'lon', 'time' columns."""
+        nc_path = str(tmp_path / "g.nc")
+        _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame({
+            "latitude": [0.0], "longitude": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts, results=[object()], granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"], source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        # Simulate what plan() does at creation time
+        out, y_orig, x_orig, time_orig = _plan_normalise_columns(pts)
+        p.pts_y_col_original = y_orig
+        p.pts_x_col_original = x_orig
+        p.pts_time_col_original = time_orig
+        p.points = out  # use normalised df
+
+        assert "lat" in p.points.columns
+        assert "lon" in p.points.columns
+        assert p.pts_y_col_original == "latitude"
+        assert p.pts_x_col_original == "longitude"
+
+        # matchup should work with normalised points
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            open_dataset_kwargs={"engine": "netcdf4"},
+            spatial_method="nearest",
+        )
+        assert "sst" in result.columns
+
+
+# ---------------------------------------------------------------------------
+# Tests for open_dataset() coord_spec and improved geoloc reporting
+# ---------------------------------------------------------------------------
+
+class TestOpenDatasetCoordSpec:
+    """Tests for coord_spec in plan.open_dataset() and improved geoloc reporting."""
+
+    def test_open_dataset_accepts_coord_spec(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """plan.open_dataset() accepts a coord_spec kwarg without raising."""
+        nc_path = str(tmp_path / "g.nc")
+        _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame({
+            "lat": [0.0], "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts, results=[object()], granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"], source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        # Should not raise
+        import xarray as xr
+        ds = p.open_dataset(
+            0,
+            open_method="dataset",
+            coord_spec={"additional": {"time": {"source": "auto", "points": "auto"}}},
+            silent=True,
+        )
+        assert isinstance(ds, xr.Dataset)
+
+    def test_open_dataset_prints_points_columns(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture
+    ) -> None:
+        """plan.open_dataset(silent=False) prints resolved points column names."""
+        nc_path = str(tmp_path / "g.nc")
+        _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame({
+            "lat": [0.0], "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts, results=[object()], granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"], source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+            pts_y_col_original="lat",
+            pts_x_col_original="lon",
+            pts_time_col_original="time",
+        )
+        p.open_dataset(0, open_method="dataset", silent=False)
+        captured = capsys.readouterr()
+        output = captured.out
+        assert "Points columns used:" in output
+        assert "y='lat'" in output
+        assert "x='lon'" in output
+        assert "time='time'" in output
+
+    def test_open_dataset_datatree_no_merge_reports_geolocation(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture
+    ) -> None:
+        """plan.open_dataset(open_method='datatree') prints a geolocation note even without merging."""
+        nc_path = str(tmp_path / "g.nc")
+        _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame({
+            "lat": [0.0], "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts, results=[object()], granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"], source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        p.open_dataset(0, open_method="datatree", silent=False)
+        captured = capsys.readouterr()
+        output = captured.out
+        # Should always print something about geolocation (not silently skip it)
+        assert "Geolocation" in output or "DataTree" in output
+
+
+# ---------------------------------------------------------------------------
+# Tests for matchup() with coord_spec and DEFAULT_COORD_SPEC access
+# ---------------------------------------------------------------------------
+
+class TestMatchupCoordSpecSignature:
+    """Tests for the coord_spec parameter being accessible in matchup() signature."""
+
+    def test_matchup_signature_has_coord_spec(self) -> None:
+        import inspect
+        from point_collocation.core.engine import matchup
+        sig = inspect.signature(matchup)
+        assert "coord_spec" in sig.parameters, "matchup() must accept a coord_spec kwarg"
+
+    def test_default_coord_spec_importable_from_top_level(self) -> None:
+        import point_collocation as pc
+        assert hasattr(pc, "DEFAULT_COORD_SPEC")
+        assert "location" in pc.DEFAULT_COORD_SPEC
+
+    def test_coord_spec_none_uses_defaults(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Passing coord_spec=None gives same result as not passing it."""
+        nc_path = str(tmp_path / "g.nc")
+        _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame({
+            "lat": [0.0], "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts, results=[object()], granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"], source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+        mock_ea.open.return_value = [nc_path]
+        r1 = pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"},
+                        spatial_method="nearest", coord_spec=None)
+
+        mock_ea.open.return_value = [nc_path]
+        r2 = pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"},
+                        spatial_method="nearest")
+
+        assert list(r1.columns) == list(r2.columns)
+        assert len(r1) == len(r2)

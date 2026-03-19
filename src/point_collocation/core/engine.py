@@ -45,6 +45,11 @@ from point_collocation.core._open_method import (
     _open_datatree_fn,
     _resolve_auto_spec,
 )
+from point_collocation.core._coord_spec import (
+    _normalize_coord_spec,
+    resolve_points_columns,
+    resolve_source_coord,
+)
 
 if TYPE_CHECKING:
     from point_collocation.core.plan import Plan
@@ -66,6 +71,7 @@ def matchup(
     variables: list[str] | None = None,
     spatial_method: str | None = None,
     open_dataset_kwargs: dict | None = None,
+    coord_spec: dict | None = None,
     silent: bool = True,
     batch_size: int | None = None,
     save_dir: str | os.PathLike | None = None,
@@ -161,6 +167,27 @@ def matchup(
         overridden by their respective defaults only for missing keys
         (``chunks`` → ``{}``, ``engine`` → ``"h5netcdf"``,
         ``decode_timedelta`` → ``False``).
+    coord_spec:
+        Coordinate specification controlling how axis/coordinate names are
+        interpreted for both the source dataset and the points DataFrame.
+        Defaults to auto-detection of lat/lon/time from standard name
+        candidates.  Example usage with optional additional axes::
+
+            coord_spec = {
+                "location": {
+                    "coordinate_system": "geographic",
+                    "y": {"source": "auto", "points": "auto"},
+                    "x": {"source": "auto", "points": "auto"},
+                },
+                "additional": {
+                    "time":       {"source": "auto",  "points": "auto"},
+                    "depth":      {"source": "z",     "points": "depth"},
+                    "wavelength": {"source": "wavelength", "points": "wave"},
+                },
+            }
+
+        Additional axes (beyond time) are optional; if the configured column
+        is absent from the points DataFrame the axis is silently skipped.
     silent:
         When ``True`` (default), all progress output is suppressed.
         Set to ``False`` to print a progress message to stdout after
@@ -300,6 +327,20 @@ def matchup(
     effective_open_method = "auto" if open_method is None else open_method
     spec = _normalize_open_method(effective_open_method, open_dataset_kwargs)
 
+    # Normalize coord_spec and resolve additional axes from the points DataFrame.
+    resolved_coord_spec = _normalize_coord_spec(coord_spec)
+    # Resolve additional axes (depth, wavelength, etc.) from the points DataFrame.
+    # We use the plan's already-normalised points (lat/lon/time canonical names).
+    # The y/x/time columns are always "lat"/"lon"/"time" after plan normalisation.
+    additional_axes = _resolve_additional_axes(plan.points, resolved_coord_spec)
+
+    if not silent:
+        _print_coord_spec_summary(
+            plan,
+            resolved_coord_spec,
+            additional_axes,
+        )
+
     effective_vars: list[str] = variables if variables is not None else plan.variables
     return _execute_plan(
         plan,
@@ -310,8 +351,8 @@ def matchup(
         batch_size=batch_size,
         save_dir=save_dir,
         granule_range=granule_range,
+        additional_axes=additional_axes,
     )
-
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +505,107 @@ def _safe_close(file_obj: object) -> None:
             pass
 
 
+def _resolve_additional_axes(
+    points: pd.DataFrame,
+    coord_spec: dict,
+) -> "dict[str, dict[str, str]]":
+    """Resolve optional additional 1D matching axes from *coord_spec*.
+
+    Returns a dict mapping each active additional axis name (excluding
+    ``"time"``, which is handled separately) to a dict with::
+
+        {
+            "points_col": "<column in points DataFrame>",
+            "source_coord": "<coordinate name in source dataset (may be 'auto')>",
+        }
+
+    An axis is considered "active" only when its configured points column
+    is actually present in *points*.  Silently skips absent optional axes.
+
+    Parameters
+    ----------
+    points:
+        Points DataFrame (after plan normalisation).
+    coord_spec:
+        Normalised coord_spec dict.
+    """
+    result: dict[str, dict[str, str]] = {}
+    for axis_name, axis_spec in coord_spec.get("additional", {}).items():
+        if axis_name == "time":
+            continue  # time handled by the existing _find_time_dim / _select_time path
+        pts_val = axis_spec.get("points", "auto")
+        col = axis_name if pts_val == "auto" else pts_val
+        if col in points.columns:
+            result[axis_name] = {
+                "points_col": col,
+                "source_coord": axis_spec.get("source", "auto"),
+            }
+    return result
+
+
+def _print_coord_spec_summary(
+    plan: "Plan",
+    coord_spec: dict,
+    additional_axes: "dict[str, dict[str, str]]",
+) -> None:
+    """Print the resolved coord_spec summary for transparency."""
+    lines = [
+        f"Points columns: y={plan.pts_y_col_original!r}, "
+        f"x={plan.pts_x_col_original!r}, "
+        f"time={plan.pts_time_col_original!r}"
+    ]
+    if additional_axes:
+        ax_parts = []
+        for ax, info in additional_axes.items():
+            ax_parts.append(
+                f"{ax}: points_col={info['points_col']!r}, "
+                f"source_coord={info['source_coord']!r}"
+            )
+        lines.append("Additional axes: " + "; ".join(ax_parts))
+    print("\n".join(lines))
+
+
+def _resolve_additional_axes_for_ds(
+    ds: xr.Dataset,
+    additional_axes: "dict[str, dict[str, str]]",
+) -> "dict[str, dict[str, str]]":
+    """Resolve source coordinate names for additional axes in *ds*.
+
+    For each axis in *additional_axes*, determines the actual coordinate
+    name in *ds* (resolving ``"auto"`` if needed).  Returns only axes
+    whose source coordinate is actually present in *ds*.
+
+    Parameters
+    ----------
+    ds:
+        Opened and normalised source dataset.
+    additional_axes:
+        Active additional axes from :func:`_resolve_additional_axes`,
+        mapping axis name → ``{"points_col": ..., "source_coord": ...}``.
+
+    Returns
+    -------
+    dict[str, dict[str, str]]
+        Same structure as *additional_axes* but with ``"source_coord"``
+        resolved to the actual coordinate name in *ds* (never ``"auto"``).
+    """
+    result: dict[str, dict[str, str]] = {}
+    for axis_name, info in additional_axes.items():
+        src = info["source_coord"]
+        if src == "auto":
+            # Use axis name as coordinate name if present.
+            if axis_name in ds.coords or axis_name in ds.data_vars or axis_name in ds.dims:
+                resolved = axis_name
+            else:
+                continue  # not in this dataset
+        else:
+            if src not in ds.coords and src not in ds.data_vars and src not in ds.dims:
+                continue  # not in this dataset
+            resolved = src
+        result[axis_name] = {"points_col": info["points_col"], "source_coord": resolved}
+    return result
+
+
 def _execute_plan(
     plan: "Plan",
     *,
@@ -474,6 +616,7 @@ def _execute_plan(
     batch_size: int | None = None,
     save_dir: str | os.PathLike | None = None,
     granule_range: tuple[int, int] | None = None,
+    additional_axes: "dict[str, dict[str, str]] | None" = None,
 ) -> pd.DataFrame:
     """Execute a :class:`~point_collocation.core.plan.Plan`.
 
@@ -481,6 +624,8 @@ def _execute_plan(
     mapped to it.  Returns one row per (point, granule) pair; points
     with zero granule matches get a single NaN row.
     """
+    if additional_axes is None:
+        additional_axes = {}
     try:
         import earthaccess  # type: ignore[import-untyped]
     except ImportError as exc:
@@ -694,6 +839,11 @@ def _execute_plan(
                         # extraction functions can handle (time, lat, lon) variables.
                         time_dim = _find_time_dim(ds)
 
+                        # Resolve active additional axes for this dataset.
+                        resolved_add_axes = _resolve_additional_axes_for_ds(
+                            ds, additional_axes
+                        )
+
                         if effective_spatial in ("xoak-kdtree", "xoak-haversine", "kdtree"):
                             # Build the k-d tree index once for all points in this
                             # granule instead of rebuilding it per point.  This
@@ -708,11 +858,11 @@ def _execute_plan(
                                 row["granule_time"] = granule_time
                                 rows_for_granule.append(row)
                             if effective_spatial == "xoak-kdtree":
-                                _extract_xoak_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim)
+                                _extract_xoak_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim, additional_axes=resolved_add_axes)
                             elif effective_spatial == "xoak-haversine":
-                                _extract_xoak_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim, use_haversine=True)
+                                _extract_xoak_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim, use_haversine=True, additional_axes=resolved_add_axes)
                             else:
-                                _extract_ndpoint_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim)
+                                _extract_ndpoint_batch(ds, rows_for_granule, variables, lon_name, lat_name, time_dim, additional_axes=resolved_add_axes)
                             output_rows.extend(rows_for_granule)
                             batch_rows.extend(rows_for_granule)
                         elif auto_1d_fallback:
@@ -730,7 +880,7 @@ def _execute_plan(
                             rows_for_granule = [_make_row(idx) for idx in pt_indices]
                             try:
                                 for row in rows_for_granule:
-                                    _extract_nearest(ds, row, variables, lon_name, lat_name, time_dim)
+                                    _extract_nearest(ds, row, variables, lon_name, lat_name, time_dim, additional_axes=resolved_add_axes)
                             except Exception as _nearest_exc:
                                 # nearest failed; rebuild clean rows and retry with kdtree.
                                 rows_for_granule = [_make_row(idx) for idx in pt_indices]
@@ -740,7 +890,7 @@ def _execute_plan(
                                 ds_nd = _slice_grid_to_points(ds, pt_lats, pt_lons, lat_name, lon_name)
                                 try:
                                     _extract_ndpoint_batch(
-                                        ds_nd, rows_for_granule, variables, lon_name, lat_name, time_dim
+                                        ds_nd, rows_for_granule, variables, lon_name, lat_name, time_dim, additional_axes=resolved_add_axes
                                     )
                                     # kdtree succeeded — switch all future granules to kdtree.
                                     effective_spatial = "kdtree"
@@ -762,7 +912,7 @@ def _execute_plan(
                                     row["pc_id"] = pt_idx
                                 row["granule_id"] = gm.granule_id
                                 row["granule_time"] = granule_time
-                                _extract_nearest(ds, row, variables, lon_name, lat_name, time_dim)
+                                _extract_nearest(ds, row, variables, lon_name, lat_name, time_dim, additional_axes=resolved_add_axes)
                                 output_rows.append(row)
                                 batch_rows.append(row)
 
@@ -1104,6 +1254,8 @@ def _extract_nearest(
     lon_name: str,
     lat_name: str,
     time_dim: str | None = None,
+    *,
+    additional_axes: "dict[str, dict[str, str]] | None" = None,
 ) -> None:
     """Extract values using ``ds.sel(..., method='nearest')`` (1-D coords).
 
@@ -1118,7 +1270,15 @@ def _extract_nearest(
         :func:`_find_time_dim`.  When not ``None``, each variable is
         squeezed or nearest-selected along this dimension after spatial
         selection so that the result is always free of the time axis.
+    additional_axes:
+        Resolved additional 1D matching axes from
+        :func:`_resolve_additional_axes_for_ds`.  Each entry maps an axis
+        name to ``{"points_col": ..., "source_coord": ...}``.  When provided,
+        a nearest-neighbour selection is also performed along each axis.
     """
+    if additional_axes is None:
+        additional_axes = {}
+
     # Extract the actual matched coordinates (nearest-neighbour grid position).
     try:
         matched_lat = ds.coords[lat_name].sel({lat_name: row["lat"]}, method="nearest")
@@ -1129,21 +1289,42 @@ def _extract_nearest(
         row["granule_lat"] = float("nan")
         row["granule_lon"] = float("nan")
 
+    # Build the base spatial selection dict.
+    base_sel: dict = {lat_name: row["lat"], lon_name: row["lon"]}
+
+    # Add additional axes to the selection (nearest-neighbour along each).
+    for axis_name, info in additional_axes.items():
+        pts_col = info["points_col"]
+        src_coord = info["source_coord"]
+        val = row.get(pts_col)
+        if val is not None:
+            base_sel[src_coord] = val
+
     for var in variables:
         try:
-            selected = ds[var].sel(
-                {lat_name: row["lat"], lon_name: row["lon"]},
-                method="nearest",
-            )
-            if time_dim is not None:
+            selected = ds[var].sel(base_sel, method="nearest")
+            if time_dim is not None and time_dim not in base_sel:
                 selected = _select_time(selected, time_dim, row.get("time"))
+            # Determine which extra dims remain after selection.
+            active_src_coords = set(base_sel.keys())
             if selected.ndim == 0:
                 row[var] = float(selected)
             else:
-                # Multi-dimensional: expand into coord-keyed entries
+                # Check for multiple leftover dims.
+                leftover = [d for d in selected.dims if d not in active_src_coords]
+                if len(leftover) > 1:
+                    raise ValueError(
+                        f"Variable {var!r} still has multiple unmatched dimensions "
+                        f"{leftover!r} after spatial and additional-axis selection. "
+                        "Add the appropriate axes to coord_spec['additional'] to "
+                        "match them, or request a variable with fewer dimensions."
+                    )
+                # Single leftover dim (e.g. wavelength): expand into coord-keyed columns.
                 row[var] = float("nan")  # placeholder removed later
                 for coord_val, val in selected.to_series().items():
                     row[f"{var}_{int(coord_val)}"] = float(val)
+        except ValueError:
+            raise
         except Exception:
             row[var] = float("nan")
 
@@ -1260,6 +1441,7 @@ def _extract_xoak_batch(
     time_dim: str | None = None,
     *,
     use_haversine: bool = False,
+    additional_axes: "dict[str, dict[str, str]] | None" = None,
 ) -> None:
     """Extract values for all *rows* using a single xoak k-d tree index.
 
@@ -1284,7 +1466,12 @@ def _extract_xoak_batch(
     use_haversine:
         When ``True``, use ``SklearnGeoBallTreeAdapter`` (haversine metric)
         instead of ``SklearnKDTreeAdapter`` (Euclidean metric).
+    additional_axes:
+        Resolved additional 1D matching axes from
+        :func:`_resolve_additional_axes_for_ds`.
     """
+    if additional_axes is None:
+        additional_axes = {}
     if use_haversine:
         try:
             from xoak.tree_adapters import SklearnGeoBallTreeAdapter as _TreeAdapter  # type: ignore[import-untyped]
@@ -1385,6 +1572,18 @@ def _extract_xoak_batch(
                     point_data = var_data.isel({query_dim: i}).squeeze()
                     if time_dim is not None:
                         point_data = _select_time(point_data, time_dim, row.get("time"))
+                    # Apply additional axes (nearest 1D selection per point).
+                    for ax_info in additional_axes.values():
+                        src_coord = ax_info["source_coord"]
+                        pts_col = ax_info["points_col"]
+                        ax_val = row.get(pts_col)
+                        if ax_val is not None and src_coord in point_data.dims:
+                            try:
+                                point_data = point_data.sel(
+                                    {src_coord: ax_val}, method="nearest"
+                                )
+                            except Exception:
+                                pass
                     if point_data.ndim == 0:
                         row[var] = float(point_data)
                     else:
@@ -1412,6 +1611,8 @@ def _extract_ndpoint_batch(
     lon_name: str,
     lat_name: str,
     time_dim: str | None = None,
+    *,
+    additional_axes: "dict[str, dict[str, str]] | None" = None,
 ) -> None:
     """Extract values for all *rows* using xarray's built-in NDPointIndex.
 
@@ -1432,7 +1633,12 @@ def _extract_ndpoint_batch(
         :func:`_find_time_dim`.  When not ``None``, each variable is
         squeezed or nearest-selected along this dimension after spatial
         selection so that the result is always free of the time axis.
+    additional_axes:
+        Resolved additional 1D matching axes from
+        :func:`_resolve_additional_axes_for_ds`.
     """
+    if additional_axes is None:
+        additional_axes = {}
     if not rows:
         return
 
@@ -1520,6 +1726,18 @@ def _extract_ndpoint_batch(
                     point_data = var_data.isel({query_dim: i}).squeeze()
                     if time_dim is not None:
                         point_data = _select_time(point_data, time_dim, row.get("time"))
+                    # Apply additional axes (nearest 1D selection per point).
+                    for ax_info in additional_axes.values():
+                        src_coord = ax_info["source_coord"]
+                        pts_col = ax_info["points_col"]
+                        ax_val = row.get(pts_col)
+                        if ax_val is not None and src_coord in point_data.dims:
+                            try:
+                                point_data = point_data.sel(
+                                    {src_coord: ax_val}, method="nearest"
+                                )
+                            except Exception:
+                                pass
                     if point_data.ndim == 0:
                         row[var] = float(point_data)
                     else:

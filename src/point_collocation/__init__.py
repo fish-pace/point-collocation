@@ -40,6 +40,19 @@ Quick start
 
     out = pc.matchup(plan, variables=["Rrs"])
 
+    # Use coord_spec for custom coordinate naming and optional extra axes:
+    out = pc.matchup(
+        plan,
+        variables=["Rrs"],
+        coord_spec={
+            "location": {"coordinate_system": "geographic"},
+            "additional": {
+                "time": {"source": "auto", "points": "auto"},
+                "depth": {"source": "z", "points": "depth"},
+            },
+        },
+    )
+
 Optional xarray accessor
 -------------------------
 Register the ``Dataset.pc`` accessor for interactive use::
@@ -50,7 +63,8 @@ Register the ``Dataset.pc`` accessor for interactive use::
     out = ds.pc.extract_points(df_points, variables=["sst"])
 """
 
+from point_collocation.core._coord_spec import DEFAULT_COORD_SPEC
 from point_collocation.core.engine import matchup
 from point_collocation.core.plan import Plan, plan
 
-__all__ = ["matchup", "plan", "Plan"]
+__all__ = ["matchup", "plan", "Plan", "DEFAULT_COORD_SPEC"]
