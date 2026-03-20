@@ -34,6 +34,7 @@ import pandas as pd
 import xarray as xr
 
 from point_collocation.core._open_method import (
+    _apply_coord_spec_to_spec,
     _apply_coords,
     _build_effective_open_kwargs,
     _cf_geoloc_names,
@@ -47,6 +48,7 @@ from point_collocation.core._open_method import (
 )
 from point_collocation.core._coord_spec import (
     _normalize_coord_spec,
+    _RESERVED_COORD_SPEC_KEYS,
     resolve_points_columns,
     resolve_source_coord,
 )
@@ -171,20 +173,27 @@ def matchup(
         Coordinate specification controlling how axis/coordinate names are
         interpreted for both the source dataset and the points DataFrame.
         Defaults to auto-detection of lat/lon/time from standard name
-        candidates.  Example usage with optional additional axes::
+        candidates.  Example usage with non-standard variable names and
+        optional additional axes::
 
             coord_spec = {
-                "location": {
-                    "coordinate_system": "geographic",
-                    "y": {"source": "auto", "points": "auto"},
-                    "x": {"source": "auto", "points": "auto"},
-                },
-                "additional": {
-                    "time":       {"source": "auto",  "points": "auto"},
-                    "depth":      {"source": "z",     "points": "depth"},
-                    "wavelength": {"source": "wavelength", "points": "wave"},
-                },
+                "coordinate_system": "geographic",
+                "y":    {"source": "grid_lat", "points": "lat"},
+                "x":    {"source": "grid_lon", "points": "lon"},
+                "time": {"source": "auto",      "points": "auto"},
+                # optional additional axes:
+                "depth":      {"source": "z",          "points": "depth"},
+                "wavelength": {"source": "wavelength", "points": "wave"},
             }
+
+        The ``source`` key is the variable/coordinate name in the source
+        dataset; ``points`` is the column name in the points DataFrame.
+        Set either to ``"auto"`` for standard-name auto-detection.
+
+        If ``coord_spec`` specifies ``source`` for ``y``/``x`` and
+        ``open_method['coords']`` also specifies explicit names, a
+        :exc:`ValueError` is raised when they conflict.  Set one side to
+        ``"auto"`` to let the other take precedence.
 
         Additional axes (beyond time) are optional; if the configured column
         is absent from the points DataFrame the axis is silently skipped.
@@ -327,8 +336,12 @@ def matchup(
     effective_open_method = "auto" if open_method is None else open_method
     spec = _normalize_open_method(effective_open_method, open_dataset_kwargs)
 
-    # Normalize coord_spec and resolve additional axes from the points DataFrame.
+    # Normalize coord_spec and bridge y/x sources into spec["coords"].
+    # This ensures non-standard lat/lon variable names in coord_spec are used
+    # when opening datasets, with conflict detection against open_method["coords"].
     resolved_coord_spec = _normalize_coord_spec(coord_spec)
+    spec = _apply_coord_spec_to_spec(spec, resolved_coord_spec)
+
     # Resolve additional axes (depth, wavelength, etc.) from the points DataFrame.
     # We use the plan's already-normalised points (lat/lon/time canonical names).
     # The y/x/time columns are always "lat"/"lon"/"time" after plan normalisation.
@@ -512,7 +525,8 @@ def _resolve_additional_axes(
     """Resolve optional additional 1D matching axes from *coord_spec*.
 
     Returns a dict mapping each active additional axis name (excluding
-    ``"time"``, which is handled separately) to a dict with::
+    the reserved axes ``y``, ``x``, ``time``, and ``coordinate_system``,
+    which are handled separately) to a dict with::
 
         {
             "points_col": "<column in points DataFrame>",
@@ -530,9 +544,9 @@ def _resolve_additional_axes(
         Normalised coord_spec dict.
     """
     result: dict[str, dict[str, str]] = {}
-    for axis_name, axis_spec in coord_spec.get("additional", {}).items():
-        if axis_name == "time":
-            continue  # time handled by the existing _find_time_dim / _select_time path
+    for axis_name, axis_spec in coord_spec.items():
+        if axis_name in _RESERVED_COORD_SPEC_KEYS:
+            continue  # y/x/time/coordinate_system handled elsewhere
         pts_val = axis_spec.get("points", "auto")
         col = axis_name if pts_val == "auto" else pts_val
         if col in points.columns:

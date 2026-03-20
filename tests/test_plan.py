@@ -7477,9 +7477,10 @@ class TestCoordSpecModule:
 
     def test_default_coord_spec_importable(self) -> None:
         from point_collocation.core._coord_spec import DEFAULT_COORD_SPEC
-        assert "location" in DEFAULT_COORD_SPEC
-        assert "additional" in DEFAULT_COORD_SPEC
-        assert "time" in DEFAULT_COORD_SPEC["additional"]
+        assert "coordinate_system" in DEFAULT_COORD_SPEC
+        assert "y" in DEFAULT_COORD_SPEC
+        assert "x" in DEFAULT_COORD_SPEC
+        assert "time" in DEFAULT_COORD_SPEC
 
     def test_normalize_none_returns_defaults(self) -> None:
         from point_collocation.core._coord_spec import _normalize_coord_spec, DEFAULT_COORD_SPEC
@@ -7488,29 +7489,27 @@ class TestCoordSpecModule:
 
     def test_normalize_partial_spec_fills_defaults(self) -> None:
         from point_collocation.core._coord_spec import _normalize_coord_spec
-        spec = {"location": {"coordinate_system": "geographic"}}
+        spec = {"coordinate_system": "geographic"}
         result = _normalize_coord_spec(spec)
-        assert result["location"]["y"]["source"] == "auto"
-        assert result["location"]["y"]["points"] == "auto"
-        assert result["location"]["x"]["source"] == "auto"
-        assert result["additional"]["time"]["points"] == "auto"
+        assert result["y"]["source"] == "auto"
+        assert result["y"]["points"] == "auto"
+        assert result["x"]["source"] == "auto"
+        assert result["time"]["points"] == "auto"
 
     def test_normalize_with_additional_axes(self) -> None:
         from point_collocation.core._coord_spec import _normalize_coord_spec
         spec = {
-            "additional": {
-                "depth": {"source": "z", "points": "depth"},
-            }
+            "depth": {"source": "z", "points": "depth"},
         }
         result = _normalize_coord_spec(spec)
-        assert result["additional"]["depth"]["source"] == "z"
-        assert result["additional"]["depth"]["points"] == "depth"
-        assert result["additional"]["time"]["source"] == "auto"  # default added
+        assert result["depth"]["source"] == "z"
+        assert result["depth"]["points"] == "depth"
+        assert result["time"]["source"] == "auto"  # default added
 
     def test_validate_invalid_coordinate_system(self) -> None:
         from point_collocation.core._coord_spec import _validate_coord_spec
         with pytest.raises(ValueError, match="coordinate_system"):
-            _validate_coord_spec({"location": {"coordinate_system": "planar"}})
+            _validate_coord_spec({"coordinate_system": "planar"})
 
     def test_resolve_points_cols_standard(self) -> None:
         from point_collocation.core._coord_spec import resolve_points_columns
@@ -7550,10 +7549,8 @@ class TestCoordSpecModule:
     def test_resolve_points_cols_additional_axis_present(self) -> None:
         from point_collocation.core._coord_spec import resolve_points_columns
         spec = {
-            "additional": {
-                "time": {"source": "auto", "points": "auto"},
-                "depth": {"source": "z", "points": "depth"},
-            }
+            "time": {"source": "auto", "points": "auto"},
+            "depth": {"source": "z", "points": "depth"},
         }
         pts = pd.DataFrame({
             "lat": [1.0], "lon": [2.0],
@@ -7566,10 +7563,8 @@ class TestCoordSpecModule:
     def test_resolve_points_cols_additional_axis_absent_silently_skipped(self) -> None:
         from point_collocation.core._coord_spec import resolve_points_columns
         spec = {
-            "additional": {
-                "time": {"source": "auto", "points": "auto"},
-                "depth": {"source": "z", "points": "depth"},
-            }
+            "time": {"source": "auto", "points": "auto"},
+            "depth": {"source": "z", "points": "depth"},
         }
         pts = pd.DataFrame({
             "lat": [1.0], "lon": [2.0],
@@ -7581,7 +7576,7 @@ class TestCoordSpecModule:
 
     def test_resolve_points_cols_explicit_nonexistent_raises(self) -> None:
         from point_collocation.core._coord_spec import resolve_points_columns
-        spec = {"location": {"y": {"points": "nonexistent"}}}
+        spec = {"y": {"points": "nonexistent"}}
         pts = pd.DataFrame({
             "lat": [1.0], "lon": [2.0],
             "time": pd.to_datetime(["2023-06-01"]),
@@ -7680,7 +7675,7 @@ class TestMatchupWithCoordSpec:
             open_method="dataset",
             open_dataset_kwargs={"engine": "netcdf4"},
             spatial_method="nearest",
-            coord_spec={"additional": {"time": {"source": "auto", "points": "auto"}}},
+            coord_spec={"time": {"source": "auto", "points": "auto"}},
         )
         assert "sst" in result.columns
 
@@ -7691,10 +7686,8 @@ class TestMatchupWithCoordSpec:
         p, _ = self._make_plan_with_depth(tmp_path, monkeypatch)
 
         coord_spec = {
-            "additional": {
-                "time": {"source": "auto", "points": "auto"},
-                "depth": {"source": "z", "points": "depth"},
-            }
+            "time": {"source": "auto", "points": "auto"},
+            "depth": {"source": "z", "points": "depth"},
         }
         result = pc.matchup(
             p,
@@ -7930,7 +7923,7 @@ class TestOpenDatasetCoordSpec:
         ds = p.open_dataset(
             0,
             open_method="dataset",
-            coord_spec={"additional": {"time": {"source": "auto", "points": "auto"}}},
+            coord_spec={"time": {"source": "auto", "points": "auto"}},
             silent=True,
         )
         assert isinstance(ds, xr.Dataset)
@@ -7979,7 +7972,7 @@ class TestOpenDatasetCoordSpec:
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture
     ) -> None:
-        """plan.open_dataset(open_method='datatree') prints a geolocation note even without merging."""
+        """plan.open_dataset(open_method='datatree') tries geoloc from root even without merging."""
         nc_path = str(tmp_path / "g.nc")
         _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
 
@@ -8007,8 +8000,10 @@ class TestOpenDatasetCoordSpec:
         p.open_dataset(0, open_method="datatree", silent=False)
         captured = capsys.readouterr()
         output = captured.out
-        # Should always print something about geolocation (not silently skip it)
-        assert "Geolocation" in output or "DataTree" in output
+        # Should print actual geolocation info from the root dataset (not just a placeholder)
+        assert "Geolocation" in output or "geolocation" in output.lower()
+        # Should NOT say "no geolocation summary" — we now try the root dataset
+        assert "no geolocation summary" not in output
 
 
 # ---------------------------------------------------------------------------
@@ -8027,7 +8022,9 @@ class TestMatchupCoordSpecSignature:
     def test_default_coord_spec_importable_from_top_level(self) -> None:
         import point_collocation as pc
         assert hasattr(pc, "DEFAULT_COORD_SPEC")
-        assert "location" in pc.DEFAULT_COORD_SPEC
+        assert "y" in pc.DEFAULT_COORD_SPEC
+        assert "x" in pc.DEFAULT_COORD_SPEC
+        assert "time" in pc.DEFAULT_COORD_SPEC
 
     def test_coord_spec_none_uses_defaults(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
@@ -8068,3 +8065,245 @@ class TestMatchupCoordSpecSignature:
 
         assert list(r1.columns) == list(r2.columns)
         assert len(r1) == len(r2)
+
+
+# ---------------------------------------------------------------------------
+# Tests for coord_spec y/x source bridging (Tasks 1, 3, 4)
+# ---------------------------------------------------------------------------
+
+
+def _make_nonstandard_geoloc_dataset(lats, lons, tmp_path, varname="sst"):
+    """Create a NetCDF dataset with non-standard lat/lon names (grid_lat, grid_lon)."""
+    import numpy as np
+    import xarray as xr
+    rng = np.random.default_rng(42)
+    data = rng.uniform(15.0, 25.0, (len(lats), len(lons))).astype(np.float32)
+    ds = xr.Dataset(
+        {
+            varname: (["y", "x"], data),
+            "grid_lat": (["y", "x"], np.meshgrid(lats, lons, indexing="ij")[0].astype(np.float32)),
+            "grid_lon": (["y", "x"], np.meshgrid(lats, lons, indexing="ij")[1].astype(np.float32)),
+        },
+        coords={"y": np.arange(len(lats)), "x": np.arange(len(lons))},
+    )
+    nc_path = str(tmp_path / "nonstandard_geoloc.nc")
+    ds.to_netcdf(nc_path)
+    return nc_path
+
+
+class TestCoordSpecBridgeToOpenMethod:
+    """Tests for coord_spec y/x source bridging into spec['coords'] (Tasks 1, 3, 4)."""
+
+    def _make_plan_with_nonstandard_geoloc(
+        self,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> "tuple[Plan, str]":
+        """Build a plan whose dataset uses grid_lat/grid_lon variable names."""
+        lats = [-10.0, 0.0, 10.0]
+        lons = [-10.0, 0.0, 10.0]
+        nc_path = _make_nonstandard_geoloc_dataset(lats, lons, tmp_path)
+
+        pts = pd.DataFrame({
+            "lat": [0.0],
+            "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/nonstandard.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+        return p, nc_path
+
+    # -----------------------------------------------------------------------
+    # Task 1: open_dataset() uses coord_spec y/x source
+    # -----------------------------------------------------------------------
+
+    def test_open_dataset_uses_coord_spec_sources_to_promote_coords(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """open_dataset() with coord_spec y/x source promotes those vars to coords."""
+        p, _ = self._make_plan_with_nonstandard_geoloc(tmp_path, monkeypatch)
+        import xarray as xr
+        coord_spec = {
+            "y": {"source": "grid_lat", "points": "lat"},
+            "x": {"source": "grid_lon", "points": "lon"},
+        }
+        ds = p.open_dataset(
+            0,
+            open_method={"xarray_open": "dataset", "open_kwargs": {"engine": "netcdf4"}},
+            coord_spec=coord_spec,
+            silent=True,
+        )
+        assert isinstance(ds, xr.Dataset)
+        # grid_lat and grid_lon should be promoted to coordinates via coord_spec y/x source
+        assert "grid_lat" in ds.coords, \
+            "grid_lat should be promoted to a coord via coord_spec y.source"
+        assert "grid_lon" in ds.coords, \
+            "grid_lon should be promoted to a coord via coord_spec x.source"
+
+    def test_open_dataset_without_coord_spec_fails_for_nonstandard_geoloc(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture
+    ) -> None:
+        """Without coord_spec, open_dataset prints failure for non-standard lat/lon names."""
+        p, _ = self._make_plan_with_nonstandard_geoloc(tmp_path, monkeypatch)
+        p.open_dataset(
+            0,
+            open_method={"xarray_open": "dataset", "open_kwargs": {"engine": "netcdf4"}},
+            coord_spec=None,
+            silent=False,
+        )
+        captured = capsys.readouterr()
+        # Without coord_spec, geoloc detection should fail (grid_lat/grid_lon not standard)
+        assert "could not detect" in captured.out or "Geolocation" in captured.out
+
+    # -----------------------------------------------------------------------
+    # Task 4: matchup() uses coord_spec y/x source for lat/lon
+    # -----------------------------------------------------------------------
+
+    def test_matchup_uses_coord_spec_sources_for_geoloc(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """matchup() with coord_spec y/x source correctly finds non-standard lat/lon."""
+        p, nc_path = self._make_plan_with_nonstandard_geoloc(tmp_path, monkeypatch)
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        coord_spec = {
+            "y": {"source": "grid_lat", "points": "lat"},
+            "x": {"source": "grid_lon", "points": "lon"},
+        }
+        result = pc.matchup(
+            p,
+            open_method={"xarray_open": "dataset", "open_kwargs": {"engine": "netcdf4"}},
+            coord_spec=coord_spec,
+            spatial_method="kdtree",
+        )
+        assert "sst" in result.columns
+        assert len(result) == 1
+
+    # -----------------------------------------------------------------------
+    # Task 3: Conflict detection between open_method['coords'] and coord_spec
+    # -----------------------------------------------------------------------
+
+    def test_conflict_raises_when_open_method_coords_and_coord_spec_disagree(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ValueError raised when open_method['coords']['lat'] conflicts with coord_spec y.source."""
+        p, _ = self._make_plan_with_nonstandard_geoloc(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="Conflict"):
+            p.open_dataset(
+                0,
+                open_method={
+                    "xarray_open": "dataset",
+                    "open_kwargs": {"engine": "netcdf4"},
+                    "coords": {"lat": "some_lat", "lon": "grid_lon"},
+                },
+                coord_spec={
+                    "y": {"source": "grid_lat", "points": "lat"},
+                    "x": {"source": "grid_lon", "points": "lon"},
+                },
+                silent=True,
+            )
+
+    def test_no_conflict_when_coord_spec_auto_and_open_method_explicit(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No conflict when coord_spec is 'auto' and open_method has explicit coords."""
+        import xarray as xr
+        # Use a dataset with standard lat/lon names
+        nc_path = str(tmp_path / "g.nc")
+        _make_l3_dataset([-10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]).to_netcdf(nc_path)
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame({
+            "lat": [0.0], "lon": [0.0],
+            "time": pd.to_datetime(["2023-06-01T12:00:00"]),
+        })
+        gm = GranuleMeta(
+            granule_id="https://example.com/g.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+        p = Plan(
+            points=pts, results=[object()], granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"], source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        # coord_spec y/x are "auto" → no conflict with open_method["coords"]
+        ds = p.open_dataset(
+            0,
+            open_method={
+                "xarray_open": "dataset",
+                "open_kwargs": {"engine": "netcdf4"},
+                "coords": {"lat": "lat", "lon": "lon"},
+            },
+            coord_spec={"y": {"source": "auto"}, "x": {"source": "auto"}},
+            silent=True,
+        )
+        assert isinstance(ds, xr.Dataset)
+
+    def test_no_conflict_when_open_method_auto_and_coord_spec_explicit(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """coord_spec wins when open_method['coords']='auto' and coord_spec has explicit sources."""
+        p, _ = self._make_plan_with_nonstandard_geoloc(tmp_path, monkeypatch)
+        import xarray as xr
+        # coord_spec specifies explicit sources; open_method uses default "auto"
+        ds = p.open_dataset(
+            0,
+            open_method={"xarray_open": "dataset", "open_kwargs": {"engine": "netcdf4"}},
+            coord_spec={
+                "y": {"source": "grid_lat", "points": "lat"},
+                "x": {"source": "grid_lon", "points": "lon"},
+            },
+            silent=True,
+        )
+        assert isinstance(ds, xr.Dataset)
+        assert "grid_lat" in ds.coords
+        assert "grid_lon" in ds.coords
+
+    def test_consistent_sources_in_both_no_conflict(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No error when open_method['coords'] and coord_spec agree on the same names."""
+        p, _ = self._make_plan_with_nonstandard_geoloc(tmp_path, monkeypatch)
+        import xarray as xr
+        ds = p.open_dataset(
+            0,
+            open_method={
+                "xarray_open": "dataset",
+                "open_kwargs": {"engine": "netcdf4"},
+                "coords": {"lat": "grid_lat", "lon": "grid_lon"},
+            },
+            coord_spec={
+                "y": {"source": "grid_lat", "points": "lat"},
+                "x": {"source": "grid_lon", "points": "lon"},
+            },
+            silent=True,
+        )
+        assert isinstance(ds, xr.Dataset)
+        assert "grid_lat" in ds.coords
+        assert "grid_lon" in ds.coords

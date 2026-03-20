@@ -9,25 +9,25 @@ coordinate/column names between:
 The structure is::
 
     coord_spec = {
-        "location": {
-            "coordinate_system": "geographic",  # only "geographic" is supported
-            "y": {"source": "auto", "points": "auto"},
-            "x": {"source": "auto", "points": "auto"},
-        },
-        "additional": {
-            "time": {"source": "auto", "points": "auto"},   # required for now
-            "depth": {"source": "z", "points": "depth"},    # optional
-            "wavelength": {"source": "wavelength", "points": "wave"},  # optional
-        },
+        "coordinate_system": "geographic",   # only "geographic" is supported
+        "y":    {"source": "auto", "points": "auto"},  # latitude-like axis
+        "x":    {"source": "auto", "points": "auto"},  # longitude-like axis
+        "time": {"source": "auto", "points": "auto"},  # time axis
+        # Optional additional axes, e.g.:
+        "depth":      {"source": "z",          "points": "depth"},
+        "wavelength": {"source": "wavelength", "points": "wave"},
     }
 
 All keys are optional when building a user-provided spec; missing keys
 receive sensible defaults via :func:`_normalize_coord_spec`.
 
+``source`` is the coordinate/variable name in the source xarray Dataset.
+``points`` is the column name in the points DataFrame.
+
 Auto-detection for points
 -------------------------
-When ``"points": "auto"`` is set for a location or additional axis,
-the package tries candidate column names in the following order:
+When ``"points": "auto"`` is set for a standard axis, the package tries
+candidate column names in the following order:
 
 * ``y`` (latitude):  ``lat``, ``latitude``, ``Latitude``, ``LATITUDE``
 * ``x`` (longitude): ``lon``, ``longitude``, ``Longitude``, ``LONGITUDE``
@@ -36,9 +36,16 @@ the package tries candidate column names in the following order:
 If multiple candidates are found or none are found, a :exc:`ValueError`
 is raised with a clear message and instructions.
 
-For other additional axes (e.g. ``depth``, ``wavelength``), ``"auto"``
+For other optional axes (e.g. ``depth``, ``wavelength``), ``"auto"``
 uses the axis name itself as the column name, and silently skips the
 axis if the column is absent (optional axes).
+
+Auto-detection for source
+-------------------------
+When ``"source": "auto"`` is set, the package uses standard name detection
+for ``y``/``x`` (via :func:`~point_collocation.core._open_method._find_geoloc_pair`)
+and CF-convention / name-based detection for ``time``.  For optional axes, the
+axis name itself is used as the variable name in the dataset.
 """
 
 from __future__ import annotations
@@ -68,15 +75,16 @@ _POINTS_TIME_CANDIDATES: list[str] = ["time", "date", "TIME", "DATE", "Time", "D
 
 #: Default coord_spec applied when the caller passes ``coord_spec=None``.
 DEFAULT_COORD_SPEC: dict = {
-    "location": {
-        "coordinate_system": "geographic",
-        "y": {"source": "auto", "points": "auto"},
-        "x": {"source": "auto", "points": "auto"},
-    },
-    "additional": {
-        "time": {"source": "auto", "points": "auto"},
-    },
+    "coordinate_system": "geographic",
+    "y":    {"source": "auto", "points": "auto"},
+    "x":    {"source": "auto", "points": "auto"},
+    "time": {"source": "auto", "points": "auto"},
 }
+
+# Reserved top-level keys that are not additional axes.
+_RESERVED_COORD_SPEC_KEYS: frozenset[str] = frozenset(
+    {"coordinate_system", "y", "x", "time"}
+)
 
 _VALID_COORDINATE_SYSTEMS: frozenset[str] = frozenset({"geographic"})
 
@@ -109,34 +117,30 @@ def _validate_coord_spec(coord_spec: dict) -> None:
             f"coord_spec must be a dict, got {type(coord_spec).__name__!r}."
         )
 
-    location = coord_spec.get("location")
-    if location is not None:
-        if not isinstance(location, dict):
-            raise TypeError("coord_spec['location'] must be a dict.")
-        coord_sys = location.get("coordinate_system", "geographic")
-        if coord_sys not in _VALID_COORDINATE_SYSTEMS:
-            raise ValueError(
-                f"coord_spec['location']['coordinate_system']={coord_sys!r} is not valid. "
-                f"Currently only {sorted(_VALID_COORDINATE_SYSTEMS)} is supported."
-            )
-        for axis in ("y", "x"):
-            if axis in location:
-                if not isinstance(location[axis], dict):
-                    raise TypeError(
-                        f"coord_spec['location'][{axis!r}] must be a dict with "
-                        f"'source' and 'points' keys."
-                    )
+    coord_sys = coord_spec.get("coordinate_system", "geographic")
+    if coord_sys not in _VALID_COORDINATE_SYSTEMS:
+        raise ValueError(
+            f"coord_spec['coordinate_system']={coord_sys!r} is not valid. "
+            f"Currently only {sorted(_VALID_COORDINATE_SYSTEMS)} is supported."
+        )
 
-    additional = coord_spec.get("additional")
-    if additional is not None:
-        if not isinstance(additional, dict):
-            raise TypeError("coord_spec['additional'] must be a dict.")
-        for axis_name, axis_spec in additional.items():
-            if not isinstance(axis_spec, dict):
+    for axis in ("y", "x", "time"):
+        if axis in coord_spec:
+            if not isinstance(coord_spec[axis], dict):
                 raise TypeError(
-                    f"coord_spec['additional'][{axis_name!r}] must be a dict with "
-                    f"'source' and/or 'points' keys."
+                    f"coord_spec[{axis!r}] must be a dict with "
+                    f"'source' and 'points' keys."
                 )
+
+    # Validate optional additional axes (any key not in _RESERVED_COORD_SPEC_KEYS).
+    for axis_name, axis_spec in coord_spec.items():
+        if axis_name in _RESERVED_COORD_SPEC_KEYS:
+            continue
+        if not isinstance(axis_spec, dict):
+            raise TypeError(
+                f"coord_spec[{axis_name!r}] must be a dict with "
+                f"'source' and/or 'points' keys."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -169,23 +173,20 @@ def _normalize_coord_spec(coord_spec: dict | None) -> dict:
 
     result = copy.deepcopy(coord_spec)
 
-    # Fill location defaults.
-    result.setdefault("location", {})
-    loc = result["location"]
-    loc.setdefault("coordinate_system", "geographic")
-    loc.setdefault("y", {})
-    loc.setdefault("x", {})
-    for axis in ("y", "x"):
-        loc[axis].setdefault("source", "auto")
-        loc[axis].setdefault("points", "auto")
+    # Fill top-level defaults.
+    result.setdefault("coordinate_system", "geographic")
 
-    # Fill additional defaults — always include time.
-    result.setdefault("additional", {})
-    add = result["additional"]
-    add.setdefault("time", {"source": "auto", "points": "auto"})
-    for _axis_spec in add.values():
-        _axis_spec.setdefault("source", "auto")
-        _axis_spec.setdefault("points", "auto")
+    for axis in ("y", "x", "time"):
+        result.setdefault(axis, {})
+        result[axis].setdefault("source", "auto")
+        result[axis].setdefault("points", "auto")
+
+    # Fill defaults for optional additional axes.
+    for axis_name, axis_spec in result.items():
+        if axis_name in _RESERVED_COORD_SPEC_KEYS:
+            continue
+        axis_spec.setdefault("source", "auto")
+        axis_spec.setdefault("points", "auto")
 
     return result
 
@@ -317,9 +318,9 @@ def resolve_points_columns(
     Returns
     -------
     dict[str, str]
-        Maps each active axis to its column name in *points*.  Additional
-        axes from ``coord_spec["additional"]`` are included only when the
-        configured column is present in *points*.
+        Maps each active axis to its column name in *points*.  Optional
+        additional axes are included only when the configured column is
+        present in *points*.
 
     Raises
     ------
@@ -327,15 +328,14 @@ def resolve_points_columns(
         If auto-detection of y, x, or time fails (ambiguous or missing).
     """
     spec = _normalize_coord_spec(coord_spec)
-    loc = spec["location"]
-    coord_sys = loc.get("coordinate_system", "geographic")
+    coord_sys = spec.get("coordinate_system", "geographic")
 
     result: dict[str, str] = {}
 
     # --- y (latitude-like) ---
     result["y"] = _resolve_points_col(
         points,
-        loc.get("y", {}).get("points", "auto"),
+        spec.get("y", {}).get("points", "auto"),
         _POINTS_Y_CANDIDATES,
         "latitude (y)",
         coord_sys=coord_sys,
@@ -344,31 +344,31 @@ def resolve_points_columns(
     # --- x (longitude-like) ---
     result["x"] = _resolve_points_col(
         points,
-        loc.get("x", {}).get("points", "auto"),
+        spec.get("x", {}).get("points", "auto"),
         _POINTS_X_CANDIDATES,
         "longitude (x)",
         coord_sys=coord_sys,
     )
 
-    # --- additional axes (time, depth, wavelength, …) ---
-    for axis_name, axis_spec in spec.get("additional", {}).items():
-        pts_val = axis_spec.get("points", "auto")
+    # --- time ---
+    result["time"] = _resolve_points_col(
+        points,
+        spec.get("time", {}).get("points", "auto"),
+        _POINTS_TIME_CANDIDATES,
+        "time",
+        coord_sys="geographic",  # time detection is always name-based
+    )
 
-        if axis_name == "time":
-            # Time uses the candidate list like y/x.
-            result["time"] = _resolve_points_col(
-                points,
-                pts_val,
-                _POINTS_TIME_CANDIDATES,
-                "time",
-                coord_sys="geographic",  # time detection is always name-based
-            )
-        else:
-            # Optional axis: use axis_name if "auto", explicit col name otherwise.
-            col = axis_name if pts_val == "auto" else pts_val
-            if col in points.columns:
-                result[axis_name] = col
-            # else: column absent — silently skip optional axis.
+    # --- optional additional axes ---
+    for axis_name, axis_spec in spec.items():
+        if axis_name in _RESERVED_COORD_SPEC_KEYS:
+            continue
+        pts_val = axis_spec.get("points", "auto")
+        # Optional axis: use axis_name if "auto", explicit col name otherwise.
+        col = axis_name if pts_val == "auto" else pts_val
+        if col in points.columns:
+            result[axis_name] = col
+        # else: column absent — silently skip optional axis.
 
     return result
 
@@ -392,7 +392,8 @@ def resolve_source_coord(
     axis_name:
         Axis name (e.g. ``"time"``, ``"depth"``, ``"wavelength"``).
     axis_spec:
-        ``coord_spec["additional"][axis_name]`` dict.
+        ``coord_spec[axis_name]`` dict (e.g. ``coord_spec["time"]``,
+        ``coord_spec["depth"]``).
 
     Returns
     -------

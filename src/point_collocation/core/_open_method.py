@@ -505,6 +505,85 @@ def _apply_coords(ds: xr.Dataset, spec: dict) -> tuple[xr.Dataset, str, str]:
     )
 
 
+def _apply_coord_spec_to_spec(spec: dict, coord_spec: dict) -> dict:
+    """Merge coord_spec y/x source names into *spec*'s ``coords`` key.
+
+    This bridges the :doc:`coord_spec` y/x ``source`` fields into the
+    open-method spec's ``coords`` field, so that non-standard lat/lon variable
+    names supplied via ``coord_spec`` are honoured when opening datasets.
+
+    Conflict detection
+    ------------------
+    If ``spec["coords"]`` already contains explicit lat or lon variable names
+    that differ from those in ``coord_spec``, a :exc:`ValueError` is raised
+    with a descriptive message.  If either side uses ``"auto"`` the explicit
+    value takes precedence.
+
+    Parameters
+    ----------
+    spec:
+        Normalized open-method dict spec (from :func:`_normalize_open_method`).
+    coord_spec:
+        Normalized coord_spec dict (from
+        :func:`~point_collocation.core._coord_spec._normalize_coord_spec`).
+
+    Returns
+    -------
+    dict
+        Updated *spec* with ``coords`` set to reflect the coord_spec sources.
+    """
+    y_source = coord_spec.get("y", {}).get("source", "auto")
+    x_source = coord_spec.get("x", {}).get("source", "auto")
+
+    # Nothing to do if both are auto.
+    if y_source == "auto" and x_source == "auto":
+        return spec
+
+    existing_coords = spec.get("coords", "auto")
+
+    # Extract any existing explicit lat/lon from spec["coords"].
+    existing_lat: str | None = None
+    existing_lon: str | None = None
+    if isinstance(existing_coords, dict):
+        existing_lat = existing_coords.get("lat")
+        existing_lon = existing_coords.get("lon")
+
+    # Conflict check: both sides explicit and different → error.
+    if (
+        y_source != "auto"
+        and existing_lat is not None
+        and existing_lat != y_source
+    ):
+        raise ValueError(
+            f"Conflict: open_method['coords']['lat']={existing_lat!r} "
+            f"and coord_spec y source={y_source!r} disagree. "
+            "Set one to 'auto' or use the same variable name in both."
+        )
+    if (
+        x_source != "auto"
+        and existing_lon is not None
+        and existing_lon != x_source
+    ):
+        raise ValueError(
+            f"Conflict: open_method['coords']['lon']={existing_lon!r} "
+            f"and coord_spec x source={x_source!r} disagree. "
+            "Set one to 'auto' or use the same variable name in both."
+        )
+
+    # After conflict checks, coord_spec source takes precedence over existing_coords.
+    # If coord_spec says "auto", fall back to whatever existing_coords had (if any).
+    eff_lat = y_source if y_source != "auto" else existing_lat
+    eff_lon = x_source if x_source != "auto" else existing_lon
+
+    if eff_lat is not None and eff_lon is not None:
+        return {**spec, "coords": {"lat": eff_lat, "lon": eff_lon}}
+
+    # Only one side could be resolved; leave spec["coords"] unchanged so that
+    # auto-detection runs.  The explicit source will need to be found via the
+    # standard name search or CF conventions.
+    return spec
+
+
 def _geoloc_description(
     ds: "xr.Dataset",
     lon_name: str,
