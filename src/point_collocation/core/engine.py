@@ -1351,6 +1351,15 @@ def _extract_axis_batch(
     for var in variables:
         try:
             selected = ds[var].sel(base_sel, method="nearest")
+            # Load the selected data into memory in a single operation before
+            # iterating over individual points.  Without this, each
+            # ``float(point_data)`` or ``to_series()`` call inside the loop
+            # would trigger a full recomputation of the dask graph for the
+            # entire ``selected`` array (all N points at once), resulting in
+            # N × (cost of loading all N points) = O(N²) I/O.  Calling
+            # ``.load()`` here materialises the dask graph exactly once so
+            # that the per-point loop operates on in-memory NumPy data.
+            selected = selected.load()
             # selected has shape (n_points, ...) with pts_dim as leading dim.
             for i, row in enumerate(rows):
                 point_data = selected.isel({pts_dim: i})
