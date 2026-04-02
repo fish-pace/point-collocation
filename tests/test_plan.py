@@ -2092,7 +2092,7 @@ class TestMatchupWithPlan:
             open_dataset_kwargs={"engine": "netcdf4"},
             silent=False,
             batch_size=1,
-            spatial_method="nearest",
+            spatial_method="axis",
         )
         captured = capsys.readouterr()
         lines = [ln for ln in captured.out.splitlines() if ln.strip() and "granules" in ln]
@@ -2640,7 +2640,7 @@ class TestNewOutputColumns:
         # (all 3 granules processed in a single batch).
         # (A "Points columns" header line is also printed; filter it out.)
         pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"},
-                   silent=False, spatial_method="nearest")
+                   silent=False, spatial_method="axis")
         captured = capsys.readouterr()
         lines = [ln for ln in captured.out.strip().splitlines() if ln.strip() and "granules" in ln]
         assert len(lines) == 1, (
@@ -3044,7 +3044,7 @@ class TestGranuleRange:
             silent=False,
             batch_size=1,
             granule_range=(2, 3),
-            spatial_method="nearest",
+            spatial_method="axis",
         )
         captured = capsys.readouterr()
         lines = [ln for ln in captured.out.splitlines() if ln.strip() and "granules" in ln]
@@ -5007,14 +5007,14 @@ class TestGeolocDetectionCfXarray:
 class TestSpatialCompatCheck:
     """Tests for _check_spatial_compat()."""
 
-    def test_nearest_1d_ok(self) -> None:
+    def test_axis_1d_ok(self) -> None:
         from point_collocation.core.engine import _check_spatial_compat
 
         ds = xr.Dataset(coords={"lon": [0.0], "lat": [0.0]})
         # Should not raise
-        _check_spatial_compat(ds, "lon", "lat", "nearest")
+        _check_spatial_compat(ds, "lon", "lat", "axis")
 
-    def test_nearest_2d_raises(self) -> None:
+    def test_axis_2d_raises(self) -> None:
         from point_collocation.core.engine import _check_spatial_compat
 
         ds = xr.Dataset(
@@ -5023,10 +5023,10 @@ class TestSpatialCompatCheck:
                 "lat": (["nrows", "ncols"], [[0.0]]),
             }
         )
-        with pytest.raises(ValueError, match="spatial_method='nearest'"):
-            _check_spatial_compat(ds, "lon", "lat", "nearest")
+        with pytest.raises(ValueError, match="spatial_method='axis'"):
+            _check_spatial_compat(ds, "lon", "lat", "axis")
 
-    def test_nearest_2d_error_mentions_auto(self) -> None:
+    def test_axis_2d_error_mentions_auto(self) -> None:
         from point_collocation.core.engine import _check_spatial_compat
 
         ds = xr.Dataset(
@@ -5036,7 +5036,7 @@ class TestSpatialCompatCheck:
             }
         )
         with pytest.raises(ValueError, match="auto"):
-            _check_spatial_compat(ds, "lon", "lat", "nearest")
+            _check_spatial_compat(ds, "lon", "lat", "axis")
 
     def test_auto_any_dims_ok(self) -> None:
         from point_collocation.core.engine import _check_spatial_compat
@@ -5202,10 +5202,10 @@ class TestXoakSpatialMethod:
         assert len(result) == 1
         assert not math.isnan(result.loc[0, "sst"])
 
-    def test_nearest_with_2d_data_raises(
+    def test_axis_with_2d_data_raises(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """spatial_method='nearest' with 2-D lat/lon raises a clear ValueError."""
+        """spatial_method='axis' with 2-D lat/lon raises a clear ValueError."""
         nc_path = str(tmp_path / "swath.nc")
         _make_l2_swath_dataset(nrows=4, ncols=5).to_netcdf(nc_path, engine="netcdf4")
 
@@ -5233,11 +5233,11 @@ class TestXoakSpatialMethod:
             time_buffer=pd.Timedelta(0),
         )
 
-        with pytest.raises(ValueError, match="spatial_method='nearest'"):
+        with pytest.raises(ValueError, match="spatial_method='axis'"):
             pc.matchup(
                 p,
                 open_method="dataset",
-                spatial_method="nearest",
+                spatial_method="axis",
                 open_dataset_kwargs={"engine": "netcdf4"},
             )
 
@@ -6401,8 +6401,7 @@ class TestAutoSpatialMethod:
     def test_auto_is_default(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Calling matchup() without spatial_method uses 'auto' (1-D coords → nearest)."""
-        pytest.importorskip("scipy")
+        """Calling matchup() without spatial_method uses 'auto' (1-D coords → axis)."""
         nc_path = str(tmp_path / "grid.nc")
         _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(nc_path, engine="netcdf4")
 
@@ -6427,10 +6426,10 @@ class TestAutoSpatialMethod:
         assert "sst" in result.columns
         assert not math.isnan(result.loc[0, "sst"])
 
-    def test_auto_1d_routes_to_nearest(
+    def test_auto_1d_routes_to_axis(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """auto with 1-D coords routes to 'nearest' (no scipy/xoak required)."""
+        """auto with 1-D coords routes to 'axis' (no scipy/xoak required)."""
         nc_path = str(tmp_path / "grid.nc")
         _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=5).to_netcdf(
             nc_path, engine="netcdf4"
@@ -6450,7 +6449,7 @@ class TestAutoSpatialMethod:
             source_kwargs={"short_name": "TEST"},
             time_buffer=pd.Timedelta(0),
         )
-        # auto + 1D coords → should produce the same result as explicit nearest
+        # auto + 1D coords → should produce the same result as explicit axis
         result_auto = pc.matchup(
             p, open_method="dataset", variables=["sst"],
             spatial_method="auto", open_dataset_kwargs={"engine": "netcdf4"},
@@ -6464,11 +6463,11 @@ class TestAutoSpatialMethod:
             source_kwargs={"short_name": "TEST"},
             time_buffer=pd.Timedelta(0),
         )
-        result_nearest = pc.matchup(
+        result_axis = pc.matchup(
             p2, open_method="dataset", variables=["sst"],
-            spatial_method="nearest", open_dataset_kwargs={"engine": "netcdf4"},
+            spatial_method="axis", open_dataset_kwargs={"engine": "netcdf4"},
         )
-        assert result_auto.loc[0, "sst"] == pytest.approx(result_nearest.loc[0, "sst"])
+        assert result_auto.loc[0, "sst"] == pytest.approx(result_axis.loc[0, "sst"])
 
     def test_auto_2d_routes_to_kdtree(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
@@ -6555,7 +6554,7 @@ class TestAutoSpatialMethod:
     ) -> None:
         """auto prints a one-line message showing the resolved spatial method and dims."""
         pytest.importorskip("scipy")
-        # Test 1-D path (nearest)
+        # Test 1-D path (axis)
         nc_path_1d = str(tmp_path / "grid.nc")
         _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(
             nc_path_1d, engine="netcdf4"
@@ -6579,7 +6578,7 @@ class TestAutoSpatialMethod:
                    open_dataset_kwargs={"engine": "netcdf4"})
         captured = capsys.readouterr()
         assert "spatial_method='auto'" in captured.out
-        assert "'nearest'" in captured.out
+        assert "'axis'" in captured.out
         assert "1-D" in captured.out
 
         # Test 2-D path (kdtree)
@@ -6630,7 +6629,7 @@ class TestAutoSpatialMethod:
             source_kwargs={"short_name": "TEST"},
             time_buffer=pd.Timedelta(0),
         )
-        pc.matchup(p, open_method="dataset", spatial_method="nearest", silent=False,
+        pc.matchup(p, open_method="dataset", spatial_method="axis", silent=False,
                    open_dataset_kwargs={"engine": "netcdf4"})
         captured = capsys.readouterr()
         assert "spatial_method='auto'" not in captured.out
@@ -6651,10 +6650,10 @@ class TestAutoSpatialMethod:
         with pytest.raises(ValueError, match="spatial_method"):
             pc.matchup(p, spatial_method="bogus")
 
-    def test_explicit_nearest_with_2d_raises_useful_message(
+    def test_explicit_axis_with_2d_raises_useful_message(
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Explicit nearest with 2-D coords raises ValueError mentioning 'auto'/'kdtree'."""
+        """Explicit axis with 2-D coords raises ValueError mentioning 'auto'/'kdtree'."""
         nc_path = str(tmp_path / "swath.nc")
         _make_l2_swath_dataset(nrows=4, ncols=5).to_netcdf(nc_path, engine="netcdf4")
         mock_ea = MagicMock()
@@ -6675,7 +6674,7 @@ class TestAutoSpatialMethod:
         )
         with pytest.raises(ValueError, match="auto"):
             pc.matchup(
-                p, open_method="dataset", spatial_method="nearest",
+                p, open_method="dataset", spatial_method="axis",
                 open_dataset_kwargs={"engine": "netcdf4"},
             )
 
@@ -7674,7 +7673,7 @@ class TestMatchupWithCoordSpec:
             p,
             open_method="dataset",
             open_dataset_kwargs={"engine": "netcdf4"},
-            spatial_method="nearest",
+            spatial_method="axis",
             coord_spec={"time": {"source": "auto", "points": "auto"}},
         )
         assert "sst" in result.columns
@@ -7693,7 +7692,7 @@ class TestMatchupWithCoordSpec:
             p,
             open_method="dataset",
             open_dataset_kwargs={"engine": "netcdf4"},
-            spatial_method="nearest",
+            spatial_method="axis",
             coord_spec=coord_spec,
         )
         assert "temp" in result.columns
@@ -7712,7 +7711,7 @@ class TestMatchupWithCoordSpec:
             p,
             open_method="dataset",
             open_dataset_kwargs={"engine": "netcdf4"},
-            spatial_method="nearest",
+            spatial_method="axis",
         )
         # Should have expanded columns like temp_0, temp_10, temp_50, temp_100
         expanded_cols = [c for c in result.columns if c.startswith("temp_")]
@@ -7751,7 +7750,7 @@ class TestMatchupWithCoordSpec:
             p,
             open_method="dataset",
             open_dataset_kwargs={"engine": "netcdf4"},
-            spatial_method="nearest",
+            spatial_method="axis",
             silent=False,
         )
         captured = capsys.readouterr()
@@ -7878,7 +7877,7 @@ class TestPlanAutoDetectsColumnNames:
             p,
             open_method="dataset",
             open_dataset_kwargs={"engine": "netcdf4"},
-            spatial_method="nearest",
+            spatial_method="axis",
         )
         assert "sst" in result.columns
 
@@ -8057,11 +8056,11 @@ class TestMatchupCoordSpecSignature:
 
         mock_ea.open.return_value = [nc_path]
         r1 = pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"},
-                        spatial_method="nearest", coord_spec=None)
+                        spatial_method="axis", coord_spec=None)
 
         mock_ea.open.return_value = [nc_path]
         r2 = pc.matchup(p, open_method="dataset", open_dataset_kwargs={"engine": "netcdf4"},
-                        spatial_method="nearest")
+                        spatial_method="axis")
 
         assert list(r1.columns) == list(r2.columns)
         assert len(r1) == len(r2)
@@ -8307,3 +8306,422 @@ class TestCoordSpecBridgeToOpenMethod:
         assert isinstance(ds, xr.Dataset)
         assert "grid_lat" in ds.coords
         assert "grid_lon" in ds.coords
+
+
+# ---------------------------------------------------------------------------
+# Tests for _extract_axis_batch (spatial_method="axis")
+# ---------------------------------------------------------------------------
+
+class TestExtractAxisBatch:
+    """Unit tests for _extract_axis_batch() and spatial_method='axis'."""
+
+    def _make_granule_meta(self) -> "GranuleMeta":
+        return GranuleMeta(
+            granule_id="https://example.com/test.nc",
+            begin=pd.Timestamp("2023-06-01T00:00:00Z"),
+            end=pd.Timestamp("2023-06-01T23:59:59Z"),
+            bbox=(-180.0, -90.0, 180.0, 90.0),
+            result_index=0,
+        )
+
+    def _make_plan(
+        self,
+        nc_path: str,
+        monkeypatch: pytest.MonkeyPatch,
+        pts: pd.DataFrame,
+    ) -> "Plan":
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+        gm = self._make_granule_meta()
+        return Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={i: [0] for i in pts.index},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+
+    # ------------------------------------------------------------------
+    # Direct unit tests for _extract_axis_batch
+    # ------------------------------------------------------------------
+
+    def test_basic_vectorized_extraction(self) -> None:
+        """_extract_axis_batch returns correct values for multiple points."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        lats = [-90.0, 0.0, 90.0]
+        lons = [-180.0, 0.0, 180.0]
+        sst_data = np.arange(9, dtype=np.float32).reshape(3, 3)
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], sst_data)},
+            coords={"lat": lats, "lon": lons},
+        )
+        rows = [
+            {"lat": -90.0, "lon": -180.0},
+            {"lat": 0.0, "lon": 0.0},
+            {"lat": 90.0, "lon": 180.0},
+        ]
+        _extract_axis_batch(ds, rows, ["sst"], "lon", "lat")
+        # Each point should get the exact grid value
+        assert rows[0]["sst"] == pytest.approx(float(sst_data[0, 0]))
+        assert rows[1]["sst"] == pytest.approx(float(sst_data[1, 1]))
+        assert rows[2]["sst"] == pytest.approx(float(sst_data[2, 2]))
+
+    def test_granule_lat_lon_set(self) -> None:
+        """_extract_axis_batch sets granule_lat and granule_lon."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], [[1.0, 2.0], [3.0, 4.0]])},
+            coords={"lat": [0.0, 10.0], "lon": [0.0, 10.0]},
+        )
+        rows = [{"lat": 1.0, "lon": 1.0}]  # nearest is (0, 0)
+        _extract_axis_batch(ds, rows, ["sst"], "lon", "lat")
+        assert rows[0]["granule_lat"] == pytest.approx(0.0)
+        assert rows[0]["granule_lon"] == pytest.approx(0.0)
+
+    def test_empty_rows_is_noop(self) -> None:
+        """_extract_axis_batch with empty rows does not raise."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], [[1.0]])},
+            coords={"lat": [0.0], "lon": [0.0]},
+        )
+        _extract_axis_batch(ds, [], ["sst"], "lon", "lat")  # no error
+
+    def test_single_point(self) -> None:
+        """_extract_axis_batch works for a single point."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], [[5.0, 6.0]])},
+            coords={"lat": [0.0], "lon": [-10.0, 10.0]},
+        )
+        rows = [{"lat": 0.1, "lon": -9.9}]
+        _extract_axis_batch(ds, rows, ["sst"], "lon", "lat")
+        assert rows[0]["sst"] == pytest.approx(5.0)
+
+    def test_many_points(self) -> None:
+        """_extract_axis_batch handles many points in one call."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        n = 50
+        lats = np.linspace(-90, 90, 10)
+        lons = np.linspace(-180, 180, 10)
+        sst_data = np.random.default_rng(42).uniform(20, 30, (10, 10)).astype(np.float32)
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], sst_data)},
+            coords={"lat": lats, "lon": lons},
+        )
+        # Use random query points
+        rng = np.random.default_rng(99)
+        rows = [
+            {"lat": float(rng.uniform(-90, 90)), "lon": float(rng.uniform(-180, 180))}
+            for _ in range(n)
+        ]
+        _extract_axis_batch(ds, rows, ["sst"], "lon", "lat")
+        # All rows must have sst set (not NaN)
+        for row in rows:
+            assert not math.isnan(row["sst"])
+
+    def test_without_time_dimension(self) -> None:
+        """_extract_axis_batch handles dataset without time dimension."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        ds = xr.Dataset(
+            {"sst": (["lat", "lon"], [[10.0, 11.0], [12.0, 13.0]])},
+            coords={"lat": [0.0, 1.0], "lon": [0.0, 1.0]},
+        )
+        rows = [{"lat": 0.0, "lon": 0.0, "time": pd.Timestamp("2023-06-01")}]
+        _extract_axis_batch(ds, rows, ["sst"], "lon", "lat", time_dim=None)
+        assert rows[0]["sst"] == pytest.approx(10.0)
+
+    def test_with_singleton_time_dimension(self) -> None:
+        """_extract_axis_batch squeezes singleton time dimension."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        ds = xr.Dataset(
+            {"sst": (["time", "lat", "lon"], [[[10.0, 11.0], [12.0, 13.0]]])},
+            coords={
+                "time": pd.to_datetime(["2023-06-01"]),
+                "lat": [0.0, 1.0],
+                "lon": [0.0, 1.0],
+            },
+        )
+        rows = [{"lat": 1.0, "lon": 1.0, "time": pd.Timestamp("2023-06-01")}]
+        _extract_axis_batch(ds, rows, ["sst"], "lon", "lat", time_dim="time")
+        assert rows[0]["sst"] == pytest.approx(13.0)
+
+    def test_with_multiple_time_steps_selects_nearest(self) -> None:
+        """_extract_axis_batch selects nearest time step per point."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        times = pd.to_datetime(["2023-06-01", "2023-06-02", "2023-06-03"])
+        sst_data = np.array([[[10.0]], [[20.0]], [[30.0]]])  # shape (3, 1, 1)
+        ds = xr.Dataset(
+            {"sst": (["time", "lat", "lon"], sst_data)},
+            coords={"time": times, "lat": [0.0], "lon": [0.0]},
+        )
+        rows = [
+            {"lat": 0.0, "lon": 0.0, "time": pd.Timestamp("2023-06-02")},
+            {"lat": 0.0, "lon": 0.0, "time": pd.Timestamp("2023-06-03")},
+        ]
+        _extract_axis_batch(ds, rows, ["sst"], "lon", "lat", time_dim="time")
+        assert rows[0]["sst"] == pytest.approx(20.0)
+        assert rows[1]["sst"] == pytest.approx(30.0)
+
+    def test_with_extra_axis(self) -> None:
+        """_extract_axis_batch handles additional axes (e.g. depth)."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        depths = [0.0, 10.0, 20.0]
+        sst_data = np.array(
+            [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]]
+        )  # shape (lat=2, lon=2, depth=3)
+        ds = xr.Dataset(
+            {"temp": (["lat", "lon", "depth"], sst_data)},
+            coords={"lat": [0.0, 1.0], "lon": [0.0, 1.0], "depth": depths},
+        )
+        rows = [
+            {"lat": 0.0, "lon": 0.0, "depth": 0.0},
+            {"lat": 0.0, "lon": 0.0, "depth": 10.0},
+        ]
+        additional_axes = {"depth": {"points_col": "depth", "source_coord": "depth"}}
+        _extract_axis_batch(ds, rows, ["temp"], "lon", "lat", additional_axes=additional_axes)
+        assert rows[0]["temp"] == pytest.approx(1.0)
+        assert rows[1]["temp"] == pytest.approx(2.0)
+
+    def test_expands_wavelength_dimension(self) -> None:
+        """_extract_axis_batch expands a leftover wavelength dimension into columns."""
+        from point_collocation.core.engine import _extract_axis_batch
+
+        wavelengths = [412, 443, 490]
+        # Rrs has dims (lat, lon, wavelength)
+        rrs_data = np.zeros((2, 2, 3), dtype=np.float32)
+        rrs_data[0, 0, :] = [0.01, 0.02, 0.03]
+        rrs_data[0, 1, :] = [0.04, 0.05, 0.06]
+        rrs_data[1, 0, :] = [0.07, 0.08, 0.09]
+        rrs_data[1, 1, :] = [0.10, 0.11, 0.12]
+        ds = xr.Dataset(
+            {"Rrs": (["lat", "lon", "wavelength"], rrs_data)},
+            coords={"lat": [0.0, 1.0], "lon": [0.0, 10.0], "wavelength": wavelengths},
+        )
+        rows = [{"lat": 0.0, "lon": 0.0}]
+        _extract_axis_batch(ds, rows, ["Rrs"], "lon", "lat")
+        # Should expand into Rrs_412, Rrs_443, Rrs_490
+        assert "Rrs_412" in rows[0]
+        assert "Rrs_443" in rows[0]
+        assert "Rrs_490" in rows[0]
+        assert rows[0]["Rrs_412"] == pytest.approx(0.01)
+        assert rows[0]["Rrs_443"] == pytest.approx(0.02)
+        assert rows[0]["Rrs_490"] == pytest.approx(0.03)
+
+    # ------------------------------------------------------------------
+    # Integration tests via pc.matchup()
+    # ------------------------------------------------------------------
+
+    def test_axis_method_1d_grid(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """spatial_method='axis' works correctly on a 1-D regular grid."""
+        nc_path = str(tmp_path / "grid.nc")
+        lats = [-90.0, -45.0, 0.0, 45.0, 90.0]
+        lons = [-180.0, -90.0, 0.0, 90.0, 180.0]
+        ds = _make_l3_dataset(lats, lons, seed=7)
+        ds.to_netcdf(nc_path, engine="netcdf4")
+
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, -45.0, 90.0],
+                "lon": [0.0, -90.0, 180.0],
+                "time": pd.to_datetime(["2023-06-01"] * 3),
+            }
+        )
+        p = self._make_plan(nc_path, monkeypatch, pts)
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            variables=["sst"],
+            spatial_method="axis",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert "sst" in result.columns
+        assert len(result) == 3
+        assert not result["sst"].isna().any()
+        # Verify matched lat/lon are grid coords
+        assert result["granule_lat"].iloc[0] == pytest.approx(0.0)
+        assert result["granule_lon"].iloc[0] == pytest.approx(0.0)
+
+    def test_axis_with_time_dimension(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """spatial_method='axis' correctly handles datasets with a time dimension."""
+        nc_path = str(tmp_path / "timegrid.nc")
+        lats = [-45.0, 0.0, 45.0]
+        lons = [-90.0, 0.0, 90.0]
+        times = ["2023-06-01", "2023-06-02", "2023-06-03"]
+        ds = _make_l3_time_dataset(lats, lons, times, seed=11)
+        ds.to_netcdf(nc_path, engine="netcdf4")
+
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, 0.0],
+                "lon": [0.0, 0.0],
+                "time": pd.to_datetime(["2023-06-01", "2023-06-03"]),
+            }
+        )
+        gm = self._make_granule_meta()
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0], 1: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            variables=["sst"],
+            spatial_method="axis",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert "sst" in result.columns
+        assert len(result) == 2
+        assert not result["sst"].isna().any()
+
+    def test_axis_without_time_dimension(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """spatial_method='axis' handles dataset without any time dimension."""
+        nc_path = str(tmp_path / "notimegrid.nc")
+        ds = _make_l3_dataset([-45.0, 0.0, 45.0], [-90.0, 0.0, 90.0], seed=3)
+        ds.to_netcdf(nc_path, engine="netcdf4")
+
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, -45.0],
+                "lon": [0.0, -90.0],
+                "time": pd.to_datetime(["2023-06-01", "2023-06-01"]),
+            }
+        )
+        p = self._make_plan(nc_path, monkeypatch, pts)
+        result = pc.matchup(
+            p,
+            open_method="dataset",
+            variables=["sst"],
+            spatial_method="axis",
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert "sst" in result.columns
+        assert len(result) == 2
+        assert not result["sst"].isna().any()
+
+    def test_axis_matches_auto_for_1d_coords(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """spatial_method='axis' and 'auto' return the same values for 1-D coords."""
+        nc_path = str(tmp_path / "grid.nc")
+        ds = _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0], seed=55)
+        ds.to_netcdf(nc_path, engine="netcdf4")
+
+        pts = pd.DataFrame(
+            {
+                "lat": [0.0, -90.0],
+                "lon": [0.0, 180.0],
+                "time": pd.to_datetime(["2023-06-01", "2023-06-01"]),
+            }
+        )
+
+        def _run(method: str) -> "pd.DataFrame":
+            mock_ea = MagicMock()
+            mock_ea.open.return_value = [nc_path]
+            monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+            gm = self._make_granule_meta()
+            p = Plan(
+                points=pts.copy(),
+                results=[object()],
+                granules=[gm],
+                point_granule_map={0: [0], 1: [0]},
+                variables=["sst"],
+                source_kwargs={"short_name": "TEST"},
+                time_buffer=pd.Timedelta(0),
+            )
+            return pc.matchup(
+                p, open_method="dataset", variables=["sst"],
+                spatial_method=method, open_dataset_kwargs={"engine": "netcdf4"},
+            )
+
+        r_axis = _run("axis")
+        r_auto = _run("auto")
+        for i in range(len(pts)):
+            assert r_axis.loc[i, "sst"] == pytest.approx(r_auto.loc[i, "sst"])
+
+    def test_auto_uses_axis_for_1d_coords(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """spatial_method='auto' with 1-D coords resolves to 'axis' (no scipy needed)."""
+        nc_path = str(tmp_path / "grid.nc")
+        _make_l3_dataset([-90.0, 0.0, 90.0], [-180.0, 0.0, 180.0]).to_netcdf(nc_path, engine="netcdf4")
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        pts = pd.DataFrame(
+            {"lat": [0.0], "lon": [0.0], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[self._make_granule_meta()],
+            point_granule_map={0: [0]},
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        pc.matchup(p, open_method="dataset", spatial_method="auto", silent=False,
+                   variables=["sst"], open_dataset_kwargs={"engine": "netcdf4"})
+        captured = capsys.readouterr()
+        assert "'axis'" in captured.out
+
+    def test_auto_2d_coords_uses_kdtree(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """spatial_method='auto' with 2-D coords resolves to 'kdtree'."""
+        pytest.importorskip("scipy")
+        nc_path = str(tmp_path / "swath.nc")
+        ds_swath = _make_l2_swath_dataset(nrows=4, ncols=5, seed=42)
+        ds_swath.to_netcdf(nc_path, engine="netcdf4")
+        mock_ea = MagicMock()
+        mock_ea.open.return_value = [nc_path]
+        monkeypatch.setitem(__import__("sys").modules, "earthaccess", mock_ea)
+
+        lat_val = float(ds_swath["lat"].values[1, 2])
+        lon_val = float(ds_swath["lon"].values[1, 2])
+        pts = pd.DataFrame(
+            {"lat": [lat_val], "lon": [lon_val], "time": pd.to_datetime(["2023-06-01T12:00:00"])}
+        )
+        gm = self._make_granule_meta()
+        p = Plan(
+            points=pts,
+            results=[object()],
+            granules=[gm],
+            point_granule_map={0: [0]},
+            variables=["sst"],
+            source_kwargs={"short_name": "TEST"},
+            time_buffer=pd.Timedelta(0),
+        )
+        result = pc.matchup(
+            p, open_method="dataset", spatial_method="auto", variables=["sst"],
+            open_dataset_kwargs={"engine": "netcdf4"},
+        )
+        assert "sst" in result.columns
+        assert not math.isnan(result.loc[0, "sst"])
