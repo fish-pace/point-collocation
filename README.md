@@ -19,6 +19,9 @@ Full documentation is available at: **<https://fish-pace.github.io/point-colloca
 - [Installation](https://fish-pace.github.io/point-collocation/installation/)
 - [Quickstart](https://fish-pace.github.io/point-collocation/quickstart/)
 - [API Reference](https://fish-pace.github.io/point-collocation/api/)
+- [Pangeo Showcase Lightning Talk](https://www.youtube.com/watch?v=d0vQthvX41o)
+- [Demo recording](https://youtu.be/o9bLQ8Vn69w)
+
 
 Examples are included for PACE, MUR, TEMPO, ICESat-2 ATL21, ECCO and DISCOVR EPIC. Distance metrics include 1D euclidian, 2D kdtree and 2D haversine for distances near poles.
 
