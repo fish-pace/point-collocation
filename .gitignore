@@ -30,3 +30,8 @@ examples/Dataframes
 
 # MkDocs build output
 site/
+
+.Rproj/
+.Rproj.user/
+*.Rproj
+.Rhistory
