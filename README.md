@@ -27,6 +27,10 @@ Examples are included for PACE, MUR, TEMPO, ICESat-2 ATL21, ECCO and DISCOVR EPI
 
 ## PyPI
 
+```
+pip install point-collocation
+```
+
 <https://pypi.org/project/point-collocation/>
 
 ## Data Regions
